@@ -9,6 +9,9 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: GOOGLE_CLIENT_ID
+        value: "" # set in the Render dashboard before deploy
       - key: GOOGLE_CLIENT_SECRET
+        value: "" # set in the Render dashboard before deploy
       - key: X_BEARER_TOKEN
+        value: "" # optional, leave empty if not using Twitter lookup
     dockerfilePath: ./Dockerfile
