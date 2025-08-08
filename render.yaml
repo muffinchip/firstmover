@@ -12,6 +12,3 @@ services:
       - key: GOOGLE_CLIENT_SECRET
       - key: X_BEARER_TOKEN
     dockerfilePath: ./Dockerfile
-    runtime:
-      cpu: 0.5
-      memoryMiB: 512
