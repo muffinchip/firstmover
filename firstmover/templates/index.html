@@ -1,0 +1,26 @@
+
+{% extends "layout.html" %}
+{% block body %}
+  <div class="card">
+    <h1>FirstMover — Early Adopter Score</h1>
+    <p class="note">How early did you join the internet's biggest platforms? Connect Google and/or enter your Twitter/X handle. We’ll place you on the adoption curve and compute a composite score.</p>
+    <div class="row">
+      <div class="col">
+        <h3>Option A: Sign in with Google</h3>
+        <p class="note">Read-only Gmail access. We only derive the date of your oldest message; we don’t store message content.</p>
+        <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
+      </div>
+      <div class="col">
+        <h3>Option B: Add Twitter/X</h3>
+        <form method="POST" action="{{ url_for('results') }}">
+          <label>Twitter/X username</label>
+          <input type="text" name="twitter_username" placeholder="e.g. jack"/>
+          <div style="margin-top:10px;">
+            <button class="btn" type="submit">Get my score</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <p class="note" style="margin-top:16px;">You can use either or both options. More platforms coming soon.</p>
+  </div>
+{% endblock %}

@@ -1,0 +1,54 @@
+
+{% extends "layout.html" %}
+{% block body %}
+  <div class="card">
+    <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
+    <h2>Your Early Adopter Results</h2>
+    {% if score %}
+      <p style="font-size:22px; font-weight:700;">Composite Score: {{ score }}/100</p>
+    {% else %}
+      <p class="note">Add at least one platform to compute a composite score.</p>
+    {% endif %}
+
+    <div class="row">
+      <div class="col">
+        <h3>Platforms</h3>
+        {% for p in platforms %}
+          <div class="platform">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div><strong>{{ p.name }}</strong></div>
+              {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
+            </div>
+            <div class="note">Joined: {{ p.joined }} {% if p.username %} ({{ p.username }}){% endif %}</div>
+            {% if p.note %}<div class="note">Note: {{ p.note }}</div>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <div class="col">
+        <h3>Your place on the curve</h3>
+        <canvas id="curveChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const labels = {{ platforms|map(attribute='name')|list|tojson }};
+    const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
+    const ctx = document.getElementById('curveChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Percentile (0–100)',
+          data: data
+        }]
+      },
+      options: {
+        scales: {
+          y: { beginAtZero: true, max: 100 }
+        }
+      }
+    });
+  </script>
+{% endblock %}

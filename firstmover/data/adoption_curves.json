@@ -1,0 +1,10 @@
+{
+  "gmail": {
+    "launch_date": "2004-04-01",
+    "maturity_date": "2012-01-01"
+  },
+  "twitter": {
+    "launch_date": "2006-03-21",
+    "maturity_date": "2014-01-01"
+  }
+}
