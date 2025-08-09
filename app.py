@@ -30,8 +30,17 @@ oauth.register(
 )
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
-with open(DATA_PATH, "r") as f:
-    CURVES = json.load(f)
+
+def load_curves(path):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print("ERROR loading adoption_curves.json:", e)
+        # Minimal fallback so the app still boots
+        return {"gmail": {"launch_date":"2004-04-01","timeline":[["2004-04-01",0],["2012-01-01",350000000],["2018-10-26",1500000000],["2025-01-01",1800000000]]}}
+
+CURVES = load_curves(DATA_PATH)
 
 # ---------- Metric tags & pretty names ----------
 METRIC_TAGS = {
