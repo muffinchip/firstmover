@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -33,8 +33,7 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.jso
 with open(DATA_PATH, "r") as f:
     CURVES = json.load(f)
 
-# ---------------- Metric tags per platform ----------------
-# What the Y-axis and badges should say for each platform.
+# ---------- Metric tags & pretty names ----------
 METRIC_TAGS = {
     "gmail": "Users",
     "twitter": "MAU",
@@ -46,7 +45,6 @@ METRIC_TAGS = {
     "reddit": "DAU",
     "amazonprime": "Paid subscribers",
 }
-
 PRETTY_NAMES = {
     "gmail": "Gmail",
     "twitter": "Twitter/X",
@@ -59,7 +57,7 @@ PRETTY_NAMES = {
     "amazonprime": "Amazon Prime",
 }
 
-# -------- Utilities --------
+# ---------- Utilities ----------
 def token_has_gmail_scope(token: dict) -> bool:
     if not token:
         return False
@@ -78,19 +76,21 @@ def ms_to_pretty_date(ms):
 def ms_to_iso_date(ms):
     return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
-def date_input_to_ms(s: str):
+def month_year_to_ms(month_str: str, year_str: str):
     try:
-        dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        m = int(month_str)
+        y = int(year_str)
+        dt = datetime(y, m, 1, tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
     except Exception:
         return None
 
-# -------- Gmail helpers --------
+# ---------- Gmail helpers ----------
 def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 def gmail_oldest_for_query(credentials: Credentials, query: str):
-    """Find the oldest message matching the Gmail search query."""
+    """Find the oldest message matching the Gmail search query by walking to the last page."""
     svc = gmail_service(credentials)
     page_token = None
     last_id = None
@@ -107,20 +107,19 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Gmail welcome queries
+# Gmail welcome queries (NO Facebook due to .edu early signups)
 WELCOME_QUERIES = {
-    # note: Facebook intentionally omitted due to .edu early signups
-    "instagram": 'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
-    "linkedin":  'from:(linkedin.com) (subject:(Welcome) OR subject:(Confirm))',
-    "dropbox":   'from:(no-reply@dropbox.com) (subject:(Welcome) OR subject:(Confirm))',
-    "openai":    'from:(noreply@openai.com OR team@openai.com) (subject:(Welcome) OR subject:(Confirm))',
-    "spotify":   'from:(no-reply@spotify.com) (subject:(Welcome) OR subject:(Confirm) OR subject:(Welcome to Spotify))',
-    "twitter":   'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) (subject:(Welcome) OR subject:(Confirm))',
-    "reddit":    'from:(noreply@reddit.com) (subject:(welcome) OR subject:(confirm))',
+    "instagram":   'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
+    "linkedin":    'from:(linkedin.com) (subject:(Welcome) OR subject:(Confirm))',
+    "dropbox":     'from:(no-reply@dropbox.com) (subject:(Welcome) OR subject:(Confirm))',
+    "openai":      'from:(noreply@openai.com OR team@openai.com) (subject:(Welcome) OR subject:(Confirm))',
+    "spotify":     'from:(no-reply@spotify.com) (subject:(Welcome) OR subject:(Confirm) OR subject:(Welcome to Spotify))',
+    "twitter":     'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) (subject:(Welcome) OR subject:(Confirm))',
+    "reddit":      'from:(noreply@reddit.com) (subject:(welcome) OR subject:(confirm))',
     "amazonprime": 'from:(no-reply@amazon.com OR prime@amazon.com) (subject:(Welcome to Amazon Prime) OR subject:(Your Amazon Prime) OR subject:(Confirm))'
 }
 
-# -------- Adoption math --------
+# ---------- Adoption math ----------
 def parse_timeline(platform):
     meta = CURVES.get(platform, {})
     tl = meta.get("timeline") or []
@@ -152,6 +151,7 @@ def timeline_series_time(platform):
     if not tl:
         return {"points_m": []}
     points = [{"x": d.strftime("%Y-%m-%d"), "y": round(u/1_000_000, 3)} for d, u in tl]
+    # Extend to 'today' using the last known value (purely visual)
     today = datetime.now(timezone.utc).date()
     last_date = tl[-1][0].date()
     if last_date < today:
@@ -169,10 +169,14 @@ def joined_before_percent(joined_users, today_users):
         return None
     return round(100 * (1 - (joined_users / today_users)), 1)
 
-# -------- Routes --------
+# ---------- Routes ----------
 @app.route("/")
 def index():
-    return render_template("index.html")
+    # Month names and year range for selects
+    months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
+    current_year = datetime.now(timezone.utc).year
+    years = list(range(current_year, 1999, -1))  # current -> 2000
+    return render_template("index.html", months=months, years=years)
 
 @app.route("/login/google")
 def login_google():
@@ -213,35 +217,34 @@ def get_google_credentials():
 
 @app.route("/results", methods=["GET", "POST"])
 def results():
-    # Collect manual entries
-    manual_dates = {}  # key -> ms
-    platform_keys = ["twitter", "instagram", "linkedin", "dropbox", "openai", "spotify", "reddit", "amazonprime"]
+    # Collect manual Month/Year entries
+    platform_keys = ["twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
+    manual_dates = {}  # key -> epoch ms
 
-    twitter_username = None
     if request.method == "POST":
-        twitter_username = (request.form.get("twitter_username") or "").strip() or None
         for key in platform_keys:
-            field = f"{key}_join_date"
-            if field in request.form and request.form[field]:
-                ms = date_input_to_ms(request.form[field])
+            m = request.form.get(f"{key}_join_month")
+            y = request.form.get(f"{key}_join_year")
+            if m and y:
+                ms = month_year_to_ms(m, y)
                 if ms:
                     manual_dates[key] = ms
     else:
-        twitter_username = (request.args.get("twitter_username") or "").strip() or None
         for key in platform_keys:
-            s = request.args.get(f"{key}_join_date")
-            if s:
-                ms = date_input_to_ms(s)
+            m = request.args.get(f"{key}_join_month")
+            y = request.args.get(f"{key}_join_year")
+            if m and y:
+                ms = month_year_to_ms(m, y)
                 if ms:
                     manual_dates[key] = ms
 
     platforms = []
     percentiles = []
 
-    # Gmail-based detection (auto) — prefer manual date if provided
+    # Gmail auto-detection via welcome emails — prefer manual if provided
     creds = get_google_credentials()
     if creds:
-        for key in ["instagram", "linkedin", "dropbox", "openai", "spotify", "twitter", "reddit", "amazonprime"]:
+        for key in ["instagram","linkedin","dropbox","openai","spotify","twitter","reddit","amazonprime"]:
             q = WELCOME_QUERIES.get(key)
             if not q:
                 continue
@@ -252,20 +255,19 @@ def results():
             if ts and key not in manual_dates:
                 manual_dates[key] = ts
 
-    # Optionally include Gmail itself as a "platform"
-    if creds:
+        # Optionally include Gmail itself as a "platform" (oldest message in mailbox)
         try:
-            ts = gmail_oldest_for_query(creds, "")  # oldest in mailbox
-            if ts:
-                add_platform_card(platforms, percentiles, "gmail", ts)
+            ts_mailbox = gmail_oldest_for_query(creds, "")
+            if ts_mailbox:
+                add_platform_card(platforms, percentiles, "gmail", ts_mailbox)
         except Exception:
             pass
 
-    # Add all other platforms we have dates for
+    # Add all platforms we have a date for
     for key, ts in manual_dates.items():
         if key not in CURVES:
             continue
-        add_platform_card(platforms, percentiles, key, ts, twitter_username=twitter_username)
+        add_platform_card(platforms, percentiles, key, ts)
 
     # Composite (small = earlier).
     score = round(100 * (sum(percentiles) / len(percentiles)), 1) if percentiles else None
@@ -273,9 +275,9 @@ def results():
     # Only render platforms we actually have dates for
     platforms = [p for p in platforms if p.get("join_iso")]
 
-    return render_template("results.html", platforms=platforms, score=score, twitter_username=twitter_username)
+    return render_template("results.html", platforms=platforms, score=score)
 
-def add_platform_card(platforms, percentiles, key, ts, twitter_username=None):
+def add_platform_card(platforms, percentiles, key, ts):
     joined_u = users_at(key, ts)
     today_u = users_today(key)
     if not (joined_u and today_u):
@@ -297,8 +299,6 @@ def add_platform_card(platforms, percentiles, key, ts, twitter_username=None):
         "metric_tag": metric_tag,
         "y_label": f"{metric_tag} (Millions)"
     }
-    if key == "twitter" and twitter_username:
-        card["username"] = twitter_username
     platforms.append(card)
 
 @app.route("/healthz")

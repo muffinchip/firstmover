@@ -17,44 +17,43 @@
       </div>
 
       <div class="col">
-        <h3>Option B: Manual dates (no login)</h3>
-        <p class="note">Enter the date you joined any of these platforms (you can fill as many or as few as you like).</p>
+        <h3>Option B: Manual Month & Year (no login)</h3>
+        <p class="note">Enter the month and year you joined any of these platforms. Fill as many as you like.</p>
+
         <form method="POST" action="{{ url_for('results') }}">
-          <div class="row" style="gap:8px;">
-            <div class="col">
-              <label>Twitter/X (username optional)</label>
-              <input type="text" name="twitter_username" placeholder="e.g. JTRobinsonLab" style="margin-bottom:6px;">
-              <input type="date" name="twitter_join_date">
+          <div class="row" style="gap:12px; align-items:flex-end;">
+            {% set platforms = [
+              ('twitter','Twitter / X'),
+              ('instagram','Instagram'),
+              ('linkedin','LinkedIn'),
+              ('dropbox','Dropbox'),
+              ('openai','OpenAI / ChatGPT'),
+              ('spotify','Spotify'),
+              ('reddit','Reddit'),
+              ('amazonprime','Amazon Prime')
+            ] %}
+
+            {% for key, label in platforms %}
+            <div class="col" style="min-width:220px;">
+              <label><strong>{{ label }}</strong></label>
+              <div style="display:flex; gap:6px; margin-top:6px;">
+                <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
+                  <option value="">Month</option>
+                  {% for month in months %}
+                    <option value="{{ loop.index }}">{{ month }}</option>
+                  {% endfor %}
+                </select>
+                <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
+                  <option value="">Year</option>
+                  {% for year in years %}
+                    <option value="{{ year }}">{{ year }}</option>
+                  {% endfor %}
+                </select>
+              </div>
             </div>
-            <div class="col">
-              <label>Instagram</label>
-              <input type="date" name="instagram_join_date">
-            </div>
-            <div class="col">
-              <label>LinkedIn</label>
-              <input type="date" name="linkedin_join_date">
-            </div>
-            <div class="col">
-              <label>Dropbox</label>
-              <input type="date" name="dropbox_join_date">
-            </div>
-            <div class="col">
-              <label>OpenAI/ChatGPT</label>
-              <input type="date" name="openai_join_date">
-            </div>
-            <div class="col">
-              <label>Spotify</label>
-              <input type="date" name="spotify_join_date">
-            </div>
-            <div class="col">
-              <label>Reddit</label>
-              <input type="date" name="reddit_join_date">
-            </div>
-            <div class="col">
-              <label>Amazon Prime</label>
-              <input type="date" name="amazonprime_join_date">
-            </div>
+            {% endfor %}
           </div>
+
           <div style="margin-top:12px;">
             <button class="btn" type="submit">Show my results</button>
           </div>
@@ -62,6 +61,6 @@
       </div>
     </div>
 
-    <p class="note" style="margin-top:16px;">More platforms coming soon.</p>
+    <p class="note" style="margin-top:16px;">We’ll plot each platform where we can determine a join date (from Google or your entries).</p>
   </div>
 {% endblock %}
