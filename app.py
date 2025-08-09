@@ -49,8 +49,8 @@ def iso_to_epoch_ms(s):
     dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     return int(dt.timestamp() * 1000)
 
-def date_to_epoch_ms(s):
-    return int(datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+def ms_to_datestr(ms):
+    return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 # ---------- Gmail oldest message via date binary search ----------
 def gmail_service(credentials: Credentials):
@@ -108,9 +108,6 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
     msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-def ms_to_datestr(ms):
-    return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-
 # --------- Analytics helpers (timeline + milestones) ---------
 def parse_timeline(platform):
     meta = CURVES.get(platform, {})
@@ -151,7 +148,7 @@ def pick_milestone(platform, joined_users):
 
 def timeline_series_annual(platform):
     """
-    Return yearly points (Jan 1) from launch to current year.
+    Yearly points (Jan 1) from launch to current year.
     Also provide values in millions for charting.
     """
     meta = CURVES.get(platform, {})
@@ -168,7 +165,7 @@ def timeline_series_annual(platform):
     values_m = [round(v / 1_000_000, 3) for v in values]
     return {"labels": labels, "values": values, "values_m": values_m}
 
-def nearest_year_label_for_ts(platform, when_ms):
+def nearest_year_label_for_ts(when_ms):
     dt = datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
     return str(dt.year)
 
@@ -215,11 +212,22 @@ def get_google_credentials():
         scopes=["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
     )
 
-def users_based_percentile(joined_users, today_users):
-    """Percent of current users who arrived AFTER you (users-based percentile)."""
+def early_adopter_percentile(joined_users, today_users):
+    """
+    Small number = earlier.
+    Example: join at 10M, today 1000M -> 10/1000 = 1.0 -> 1.0th percentile (top 1% earliest).
+    """
     if joined_users is None or today_users in (None, 0):
         return None
-    # Example: join at 10M, today 1000M -> 1 - 10/1000 = 0.99 -> 99.0th percentile (you were early)
+    return round(100 * (joined_users / today_users), 1)
+
+def joined_before_percent(joined_users, today_users):
+    """
+    Narrative: percent of current users who arrived AFTER you.
+    Example above -> 99.0%.
+    """
+    if joined_users is None or today_users in (None, 0):
+        return None
     return round(100 * (1 - (joined_users / today_users)), 1)
 
 @app.route("/results", methods=["GET", "POST"])
@@ -231,7 +239,7 @@ def results():
         twitter_username = request.args.get("twitter_username", "").strip() or None
 
     platforms = []
-    percentiles = []  # now users-based; we'll average for composite
+    percentiles = []  # collect EARLY-adopter percentiles (small = earlier), as 0..1 for averaging
 
     # Gmail (if logged in with scope)
     creds = get_google_credentials()
@@ -242,17 +250,19 @@ def results():
                 joined_u = users_at("gmail", gmail_ms)
                 today_u = users_today("gmail")
                 series = timeline_series_annual("gmail")
-                join_label = nearest_year_label_for_ts("gmail", gmail_ms)
-                p_users = users_based_percentile(joined_u, today_u)
-                if p_users is not None:
-                    percentiles.append(p_users / 100.0)  # store as 0..1 for averaging
+                join_label = nearest_year_label_for_ts(gmail_ms)
+
+                badge = early_adopter_percentile(joined_u, today_u)  # small = earlier
+                if badge is not None:
+                    percentiles.append(badge / 100.0)
+
                 platforms.append({
                     "name": "Gmail",
                     "joined": ms_to_datestr(gmail_ms),
-                    "percentile": p_users,  # users-based percentile (matches narrative)
+                    "percentile": badge,  # shown in the pill
                     "joined_users": joined_u,
                     "today_users": today_u,
-                    "narrative_percent": p_users,  # same definition to avoid mismatch
+                    "narrative_percent": joined_before_percent(joined_u, today_u),
                     "narrative_fact": pick_milestone("gmail", joined_u) if joined_u else None,
                     "chart": series,
                     "join_label": join_label
@@ -271,18 +281,20 @@ def results():
             joined_u = users_at("twitter", t_ms)
             today_u = users_today("twitter")
             series = timeline_series_annual("twitter")
-            join_label = nearest_year_label_for_ts("twitter", t_ms)
-            p_users = users_based_percentile(joined_u, today_u)
-            if p_users is not None:
-                percentiles.append(p_users / 100.0)
+            join_label = nearest_year_label_for_ts(t_ms)
+
+            badge = early_adopter_percentile(joined_u, today_u)
+            if badge is not None:
+                percentiles.append(badge / 100.0)
+
             platforms.append({
                 "name": "Twitter/X",
                 "joined": ms_to_datestr(t_ms),
-                "percentile": p_users,
+                "percentile": badge,
                 "username": twitter_username,
                 "joined_users": joined_u,
                 "today_users": today_u,
-                "narrative_percent": p_users,
+                "narrative_percent": joined_before_percent(joined_u, today_u),
                 "narrative_fact": pick_milestone("twitter", joined_u) if joined_u else None,
                 "chart": series,
                 "join_label": join_label
@@ -290,7 +302,7 @@ def results():
         else:
             platforms.append({"name": "Twitter/X", "joined": "Unavailable", "percentile": None, "username": twitter_username, "note": "API token missing or lookup failed."})
 
-    # Composite score: average of users-based percentiles across connected platforms
+    # Composite score: average of EARLY-adopter percentiles across platforms (small = earlier)
     score = None
     if percentiles:
         avg = sum(percentiles) / len(percentiles)   # 0..1

@@ -3,14 +3,12 @@
   <div class="card">
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
-    {% if not platforms or not platforms|selectattr("name","equalto","Gmail")|selectattr("percentile")|list %}
-      <p class="note">Missing Gmail date? <a href="{{ url_for('login_google') }}">Grant Gmail access</a>.</p>
-    {% endif %}
+
     {% if score is not none %}
-      <p style="font-size:22px; font-weight:700;">Composite Percentile (users-based): {{ score }}/100</p>
-      <p class="note">This is the percent of current users who arrived after you, averaged across connected platforms.</p>
+      <p style="font-size:22px; font-weight:700;">Composite Percentile: {{ score }} / 100</p>
+      <p class="note">Smaller is earlier. This averages your early-adopter percentile across the platforms you connected.</p>
     {% else %}
-      <p class="note">Add at least one platform to compute your users-based percentile.</p>
+      <p class="note">Add at least one platform to compute your percentile.</p>
     {% endif %}
 
     <div class="row">
@@ -41,32 +39,53 @@
                 (function(){
                   const labels = {{ p.chart['labels']|tojson }};      // ["2004","2005",...]
                   const valuesM = {{ p.chart['values_m']|tojson }};    // users in millions
+                  const joinLabel = "{{ p.join_label or '' }}";
                   const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                  const datasets = [{
-                    type: 'line',
-                    label: 'Cumulative users (Millions)',
-                    data: valuesM,
-                    fill: false,
-                    tension: 0.1
-                  }];
+                  // Custom inline plugin to draw dashed vertical line + arrow at join year
+                  const joinMarkerPlugin = {
+                    id: 'joinMarker{{ loop.index }}',
+                    afterDraw(chart, args, opts) {
+                      if (!joinLabel) return;
+                      const idx = labels.indexOf(joinLabel);
+                      if (idx < 0) return;
+                      const xScale = chart.scales.x;
+                      const x = xScale.getPixelForValue(idx);
+                      const top = chart.chartArea.top;
+                      const bottom = chart.chartArea.bottom;
 
-                  {% if p.join_label %}
-                    const joinLabel = "{{ p.join_label }}";            // e.g. "2010"
-                    const idx = labels.indexOf(joinLabel);
-                    if (idx >= 0) {
-                      const top = Math.max.apply(null, valuesM) * 1.05;
-                      const base = 0;
-                      const vDataTop = new Array(valuesM.length).fill(null); vDataTop[idx] = top;
-                      const vDataBase = new Array(valuesM.length).fill(null); vDataBase[idx] = base;
-                      datasets.push({ type: 'line', data: vDataTop, borderDash: [6,4], pointRadius: 0 });
-                      datasets.push({ type: 'line', data: vDataBase, borderDash: [6,4], pointRadius: 0 });
+                      const c = chart.ctx;
+                      c.save();
+                      c.setLineDash([6,4]);
+                      c.lineWidth = 1.5;
+                      c.beginPath();
+                      c.moveTo(x, top);
+                      c.lineTo(x, bottom);
+                      c.stroke();
+                      // Arrow head at the top of the line
+                      c.setLineDash([]);
+                      c.beginPath();
+                      c.moveTo(x, top);           // tip
+                      c.lineTo(x - 6, top + 12);  // left
+                      c.lineTo(x + 6, top + 12);  // right
+                      c.closePath();
+                      c.fill();
+                      c.restore();
                     }
-                  {% endif %}
+                  };
 
                   new Chart(ctx, {
                     type: 'line',
-                    data: { labels: labels, datasets: datasets },
+                    data: {
+                      labels: labels,
+                      datasets: [{
+                        type: 'line',
+                        label: 'Cumulative users (Millions)',
+                        data: valuesM,
+                        fill: false,
+                        tension: 0.1
+                      }]
+                    },
                     options: {
                       plugins: { legend: { display: false } },
                       scales: {
@@ -79,7 +98,8 @@
                           title: { display: true, text: 'Users (Millions)' }
                         }
                       }
-                    }
+                    },
+                    plugins: [joinMarkerPlugin]
                   });
                 })();
               </script>
@@ -98,7 +118,7 @@
   </div>
 
   <script>
-    // Bar chart for users-based percentiles
+    // Bar chart for early-adopter percentiles (smaller = earlier)
     const labels = {{ platforms|map(attribute='name')|list|tojson }};
     const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
     const ctx = document.getElementById('curveChart').getContext('2d');
@@ -107,16 +127,16 @@
       data: {
         labels: labels,
         datasets: [{
-          label: 'Users-based Percentile (0–100)',
+          label: 'Early-adopter Percentile (lower is earlier)',
           data: data
         }]
       },
       options: {
+        plugins: { legend: { display: false } },
         scales: {
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
           x: { title: { display: true, text: 'Platform' } }
-        },
-        plugins: { legend: { display: false } }
+        }
       }
     });
   </script>
