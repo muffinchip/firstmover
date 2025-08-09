@@ -1,12 +1,15 @@
 {% extends "layout.html" %}
 {% block body %}
+  <!-- Time adapter enables Chart.js 'time' scale -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+
   <div class="card">
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
 
     {% if score is not none %}
       <p style="font-size:22px; font-weight:700;">Composite Percentile: {{ score }} / 100</p>
-      <p class="note">Smaller is earlier. This averages your early-adopter percentile across the platforms you connected.</p>
+      <p class="note">Smaller is earlier. This averages your percentile across the platforms you connected.</p>
     {% else %}
       <p class="note">Add at least one platform to compute your percentile.</p>
     {% endif %}
@@ -26,34 +29,30 @@
               <p style="margin:6px 0 0 0;">
                 You joined {{ p.name }} before <strong>{{ p.narrative_percent }}%</strong> of current users.
                 When you joined, {{ p.name }} had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
-                users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today —
-                {{ p.narrative_fact }}.
+                users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
               </p>
             {% endif %}
 
-            {% if p.chart %}
+            {% if p.chart and p.chart['points_m'] %}
               <div style="margin-top:10px;">
                 <canvas id="curve-{{ loop.index }}"></canvas>
               </div>
               <script>
                 (function(){
-                  const labels = {{ p.chart['labels']|tojson }};      // ["2004","2005",...]
-                  const valuesM = {{ p.chart['values_m']|tojson }};    // users in millions
-                  const joinLabel = "{{ p.join_label or '' }}";
+                  const points = {{ p.chart['points_m']|tojson }};  // [{x:'YYYY-MM-DD', y: <millions>}]
+                  const joinISO = "{{ p.join_iso or '' }}";
                   const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                  // Custom inline plugin to draw dashed vertical line + arrow at join year
+                  // Inline plugin: dashed vertical line + small arrow at the exact joined date
                   const joinMarkerPlugin = {
                     id: 'joinMarker{{ loop.index }}',
-                    afterDraw(chart, args, opts) {
-                      if (!joinLabel) return;
-                      const idx = labels.indexOf(joinLabel);
-                      if (idx < 0) return;
+                    afterDraw(chart) {
+                      if (!joinISO) return;
                       const xScale = chart.scales.x;
-                      const x = xScale.getPixelForValue(idx);
-                      const top = chart.chartArea.top;
-                      const bottom = chart.chartArea.bottom;
+                      const x = xScale.getPixelForValue(new Date(joinISO));
+                      if (!isFinite(x)) return;
 
+                      const { top, bottom } = chart.chartArea;
                       const c = chart.ctx;
                       c.save();
                       c.setLineDash([6,4]);
@@ -62,7 +61,7 @@
                       c.moveTo(x, top);
                       c.lineTo(x, bottom);
                       c.stroke();
-                      // Arrow head at the top of the line
+                      // Arrow head at the top
                       c.setLineDash([]);
                       c.beginPath();
                       c.moveTo(x, top);           // tip
@@ -77,11 +76,10 @@
                   new Chart(ctx, {
                     type: 'line',
                     data: {
-                      labels: labels,
                       datasets: [{
-                        type: 'line',
                         label: 'Cumulative users (Millions)',
-                        data: valuesM,
+                        data: points,        // [{x: date, y: millions}]
+                        parsing: false,
                         fill: false,
                         tension: 0.1
                       }]
@@ -90,6 +88,8 @@
                       plugins: { legend: { display: false } },
                       scales: {
                         x: {
+                          type: 'time',
+                          time: { unit: 'year' },
                           ticks: { maxRotation: 0, autoSkip: true },
                           title: { display: true, text: 'Year' }
                         },

@@ -37,7 +37,6 @@ with open(DATA_PATH, "r") as f:
 
 # --- Helpers ---
 def token_has_gmail_scope(token: dict) -> bool:
-    """Return True if the OAuth token includes the Gmail read-only scope."""
     if not token:
         return False
     scopes = token.get("scope") or token.get("scopes")
@@ -49,7 +48,12 @@ def iso_to_epoch_ms(s):
     dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     return int(dt.timestamp() * 1000)
 
-def ms_to_datestr(ms):
+def ms_to_pretty_date(ms):
+    dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
+    # e.g., November 1, 2004
+    return dt.strftime("%B %-d, %Y") if hasattr(datetime, "fromisoformat") else dt.strftime("%B %d, %Y")
+
+def ms_to_iso_date(ms):
     return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 # ---------- Gmail oldest message via date binary search ----------
@@ -57,16 +61,14 @@ def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 def gmail_has_messages_before(service, dt):
-    """Return True if there exists at least one message strictly before midnight of dt (UTC)."""
     q = f"before:{dt.strftime('%Y/%m/%d')}"
     resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
     return bool(resp.get("messages"))
 
 def gmail_find_earliest_date(service):
-    """Binary search the earliest date with any message, between 2004-01-01 and today+1."""
     lo = datetime(2004, 1, 1, tzinfo=timezone.utc)
     hi = datetime.now(timezone.utc) + timedelta(days=1)
-    for _ in range(32):  # ~day resolution
+    for _ in range(32):
         mid = lo + (hi - lo) / 2
         if gmail_has_messages_before(service, mid):
             hi = mid
@@ -92,7 +94,6 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
         if not page_token:
             break
     if not last_id:
-        # Fallback (rare): try last page of whole mailbox
         page_token = None
         last_id = None
         while True:
@@ -108,7 +109,7 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
     msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# --------- Analytics helpers (timeline + milestones) ---------
+# --------- Analytics helpers (timeline) ---------
 def parse_timeline(platform):
     meta = CURVES.get(platform, {})
     tl = meta.get("timeline") or []
@@ -134,40 +135,39 @@ def users_today(platform):
     tl = parse_timeline(platform)
     return tl[-1][1] if tl else None
 
-def pick_milestone(platform, joined_users):
-    meta = CURVES.get(platform, {})
-    milestones = meta.get("milestones") or []
-    milestones = sorted(milestones, key=lambda m: m["users"])
-    after = next((m for m in milestones if joined_users < m["users"]), None)
-    if after:
-        return f"before the platform {after['text']}"
-    before = [m for m in milestones if joined_users >= m["users"]]
-    if before:
-        return f"shortly after it {before[-1]['text']}"
-    return "very early in its growth"
-
-def timeline_series_annual(platform):
+def timeline_series_time(platform):
     """
-    Yearly points (Jan 1) from launch to current year.
-    Also provide values in millions for charting.
+    Return points as [{x:'YYYY-MM-DD', y:<millions>}] from the timeline,
+    ensuring there's a point for 'today' as the last item.
+    We use a time scale in Chart.js with year ticks.
     """
-    meta = CURVES.get(platform, {})
-    launch = datetime.strptime(meta["launch_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    start_year = launch.year
-    end_year = datetime.now(timezone.utc).year
-    labels = []
-    values = []
-    for y in range(start_year, end_year + 1):
-        dt = datetime(y, 1, 1, tzinfo=timezone.utc)
-        labels.append(str(y))
-        u = users_at(platform, int(dt.timestamp() * 1000))
-        values.append(u if u is not None else 0)
-    values_m = [round(v / 1_000_000, 3) for v in values]
-    return {"labels": labels, "values": values, "values_m": values_m}
+    tl = parse_timeline(platform)
+    if not tl:
+        return {"points_m": []}
+    points = [{"x": d.strftime("%Y-%m-%d"), "y": round(u/1_000_000, 3)} for d, u in tl]
+    # If last timeline date < today, append today's users as a flat extension
+    today = datetime.now(timezone.utc).date()
+    last_date = tl[-1][0].date()
+    if last_date < today:
+        points.append({"x": today.strftime("%Y-%m-%d"), "y": round(tl[-1][1]/1_000_000, 3)})
+    return {"points_m": points}
 
-def nearest_year_label_for_ts(when_ms):
-    dt = datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
-    return str(dt.year)
+def early_adopter_percentile(joined_users, today_users):
+    """
+    Small number = earlier (your percentile rank among current users).
+    Example: join at 10M, today 1000M -> 10/1000 = 1.0 -> 1.0th percentile.
+    """
+    if joined_users is None or today_users in (None, 0):
+        return None
+    return round(100 * (joined_users / today_users), 1)
+
+def joined_before_percent(joined_users, today_users):
+    """
+    Narrative: % of current users who arrived AFTER you.
+    """
+    if joined_users is None or today_users in (None, 0):
+        return None
+    return round(100 * (1 - (joined_users / today_users)), 1)
 
 # --- Routes ---
 @app.route("/")
@@ -177,7 +177,6 @@ def index():
 @app.route("/login/google")
 def login_google():
     redirect_uri = url_for("auth_google", _external=True)
-    # Force consent so users see the Gmail checkbox; allow upgrading scopes
     return oauth.google.authorize_redirect(
         redirect_uri,
         prompt="consent",
@@ -212,24 +211,6 @@ def get_google_credentials():
         scopes=["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
     )
 
-def early_adopter_percentile(joined_users, today_users):
-    """
-    Small number = earlier.
-    Example: join at 10M, today 1000M -> 10/1000 = 1.0 -> 1.0th percentile (top 1% earliest).
-    """
-    if joined_users is None or today_users in (None, 0):
-        return None
-    return round(100 * (joined_users / today_users), 1)
-
-def joined_before_percent(joined_users, today_users):
-    """
-    Narrative: percent of current users who arrived AFTER you.
-    Example above -> 99.0%.
-    """
-    if joined_users is None or today_users in (None, 0):
-        return None
-    return round(100 * (1 - (joined_users / today_users)), 1)
-
 @app.route("/results", methods=["GET", "POST"])
 def results():
     twitter_username = None
@@ -239,7 +220,7 @@ def results():
         twitter_username = request.args.get("twitter_username", "").strip() or None
 
     platforms = []
-    percentiles = []  # collect EARLY-adopter percentiles (small = earlier), as 0..1 for averaging
+    percentiles = []  # early-adopter percentiles (small = earlier), stored as 0..1
 
     # Gmail (if logged in with scope)
     creds = get_google_credentials()
@@ -249,23 +230,22 @@ def results():
             if gmail_ms:
                 joined_u = users_at("gmail", gmail_ms)
                 today_u = users_today("gmail")
-                series = timeline_series_annual("gmail")
-                join_label = nearest_year_label_for_ts(gmail_ms)
+                series = timeline_series_time("gmail")
+                join_iso = ms_to_iso_date(gmail_ms)
 
-                badge = early_adopter_percentile(joined_u, today_u)  # small = earlier
+                badge = early_adopter_percentile(joined_u, today_u)
                 if badge is not None:
                     percentiles.append(badge / 100.0)
 
                 platforms.append({
                     "name": "Gmail",
-                    "joined": ms_to_datestr(gmail_ms),
-                    "percentile": badge,  # shown in the pill
+                    "joined": ms_to_pretty_date(gmail_ms),  # pretty Month Day, Year
+                    "percentile": badge,  # small = earlier
                     "joined_users": joined_u,
                     "today_users": today_u,
                     "narrative_percent": joined_before_percent(joined_u, today_u),
-                    "narrative_fact": pick_milestone("gmail", joined_u) if joined_u else None,
                     "chart": series,
-                    "join_label": join_label
+                    "join_iso": join_iso
                 })
             else:
                 platforms.append({"name": "Gmail", "joined": "Unavailable", "percentile": None, "note": "Could not determine oldest message."})
@@ -280,8 +260,8 @@ def results():
         if t_ms:
             joined_u = users_at("twitter", t_ms)
             today_u = users_today("twitter")
-            series = timeline_series_annual("twitter")
-            join_label = nearest_year_label_for_ts(t_ms)
+            series = timeline_series_time("twitter")
+            join_iso = ms_to_iso_date(t_ms)
 
             badge = early_adopter_percentile(joined_u, today_u)
             if badge is not None:
@@ -289,23 +269,21 @@ def results():
 
             platforms.append({
                 "name": "Twitter/X",
-                "joined": ms_to_datestr(t_ms),
+                "joined": ms_to_pretty_date(t_ms),
                 "percentile": badge,
                 "username": twitter_username,
                 "joined_users": joined_u,
                 "today_users": today_u,
                 "narrative_percent": joined_before_percent(joined_u, today_u),
-                "narrative_fact": pick_milestone("twitter", joined_u) if joined_u else None,
                 "chart": series,
-                "join_label": join_label
+                "join_iso": join_iso
             })
         else:
             platforms.append({"name": "Twitter/X", "joined": "Unavailable", "percentile": None, "username": twitter_username, "note": "API token missing or lookup failed."})
 
-    # Composite score: average of EARLY-adopter percentiles across platforms (small = earlier)
     score = None
     if percentiles:
-        avg = sum(percentiles) / len(percentiles)   # 0..1
+        avg = sum(percentiles) / len(percentiles)
         score = round(100 * avg, 1)
 
     return render_template("results.html", platforms=platforms, score=score, twitter_username=twitter_username)
@@ -314,7 +292,6 @@ def results():
 def healthz():
     return jsonify({"ok": True})
 
-# Optional: minimal diag
 @app.route("/diag")
 def diag():
     token = session.get("google_token")
