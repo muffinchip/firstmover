@@ -6,6 +6,7 @@
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
 
+    <!-- Composite scores above bar chart -->
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-top:8px;">
       {% if score is not none %}
         <div><strong>Composite Percentile:</strong> {{ score }}</div>
@@ -52,8 +53,8 @@
 
             {% if p.joined_users and p.today_users %}
               <p style="margin:6px 0 0 0;">
-                You joined {{ p.name }} before <strong>{{ p.narrative_percent }}%</strong> of current users.
-                When you joined, {{ p.name }} had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
+                You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch, before <strong>{{ p.narrative_percent }}%</strong> of current users.
+                When you joined {{ p.name }} it had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
                 users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
               </p>
             {% endif %}
@@ -146,51 +147,29 @@
       <div class="col">
         <h3>Your place on the curve</h3>
         <canvas id="curveChart"></canvas>
-
-        <!-- Below the chart, list each platform’s percentile with a verified badge if applicable -->
-        <div style="margin-top:10px;">
-          {% if platforms|length > 0 %}
-            <ul style="list-style:none;padding:0;margin:0;display:flex;gap:10px;flex-direction:column;">
-              {% for p in platforms %}
-                <li>
-                  <strong>{{ p.name }}</strong> — {{ p.percentile }}th percentile
-                  {% if p.verified %}
-                    <span class="pill">✓ verified</span>
-                  {% else %}
-                    <span class="pill secondary">self-report</span>
-                  {% endif %}
-                </li>
-              {% endfor %}
-            </ul>
-          {% endif %}
-        </div>
+        <div id="logoRow" style="display:flex; gap:16px; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-top:10px;"></div>
       </div>
-    </div>
-
-    <!-- Bottom summary (repeat the composite + verified composite) -->
-    <div style="margin-top:18px; display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
-      {% if score is not none %}
-        <div><strong>Composite Percentile:</strong> {{ score }}</div>
-      {% else %}
-        <div><strong>Composite Percentile:</strong> N/A</div>
-      {% endif %}
-
-      {% if score_verified is not none %}
-        <div><strong>Verified Composite Percentile:</strong> {{ score_verified }} <span class="pill">✓ verified</span></div>
-      {% else %}
-        <div><strong>Verified Composite Percentile:</strong> N/A</div>
-      {% endif %}
     </div>
   </div>
 
   <script>
-    // Bar chart of percentiles (lower = earlier).
+    // Bar chart of percentiles (lower = earlier), with labels and verified badges under each bar + logos.
     const labels = {{ chart_labels|tojson }};
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
+    const labelToLogo = {{ chart_logos|tojson }};
 
     const ctx = document.getElementById('curveChart').getContext('2d');
+
+    // Preload logo images
+    const logos = {};
+    Object.entries(labelToLogo).forEach(([label, url]) => {
+      if (!url) return;
+      const img = new Image();
+      img.src = url;
+      logos[label] = img;
+    });
 
     const verifiedLine = {
       id: 'verifiedLine',
@@ -211,12 +190,34 @@
       }
     };
 
-    // Make a small per-bar tooltip suffix for verified items
-    function labelForTooltip(ctx) {
-      const v = ctx.parsed.y;
-      const isVerified = verifiedFlags[ctx.dataIndex];
-      return (isVerified ? '✓ ' : '') + v + 'th percentile';
-    }
+    const underBarLabels = {
+      id: 'underBarLabels',
+      afterDatasetsDraw(chart, args, opts) {
+        const { ctx, scales: { x, y } } = chart;
+        chart.data.datasets[0].data.forEach((val, i) => {
+          const xPos = x.getPixelForValue(i);
+          const yBase = y.getPixelForValue(0);
+
+          const label = labels[i];
+          const verified = verifiedFlags[i];
+          const text = (verified ? '✓ ' : '') + val + 'th';
+
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          ctx.fillText(text, xPos, yBase + 6);
+
+          // Draw logo under the text if available
+          const img = logos[label];
+          if (img && img.complete) {
+            const size = 18; // logo size
+            ctx.drawImage(img, xPos - size/2, yBase + 22, size, size);
+          }
+          ctx.restore();
+        });
+      }
+    };
 
     new Chart(ctx, {
       type: 'bar',
@@ -232,7 +233,11 @@
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: labelForTooltip
+              label: (ctx) => {
+                const v = ctx.parsed.y;
+                const isVerified = verifiedFlags[ctx.dataIndex];
+                return (isVerified ? '✓ ' : '') + v + 'th percentile';
+              }
             }
           }
         },
@@ -241,7 +246,7 @@
           x: { title: { display: true, text: 'Platform' } }
         }
       },
-      plugins: [verifiedLine]
+      plugins: [verifiedLine, underBarLabels]
     });
   </script>
 {% endblock %}

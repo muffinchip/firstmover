@@ -1,32 +1,29 @@
 
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>FirstMover — Early Adopter Score</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-      body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 0; background: #f7f7fb; color:#111827;}
-      .container { max-width: 960px; margin: 0 auto; padding: 24px;}
-      .card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 18px rgba(0,0,0,0.06);}
-      .btn { display:inline-block; background:#111827; color:white; padding:10px 16px; border-radius:8px; text-decoration:none; }
-      .btn.secondary { background:#4b5563; }
-      input[type=text] { width:100%; padding:10px 12px; border:1px solid #e5e7eb; border-radius:8px; font-size:16px;}
-      .row { display:flex; gap:16px; flex-wrap:wrap; }
-      .col { flex:1 1 420px; }
-      .pill { display:inline-block; background:#eef2ff; color:#3730a3; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600;}
-      .note { color:#6b7280; font-size:14px;}
-      .platform { border:1px solid #e5e7eb; border-radius:10px; padding:12px; margin-bottom:10px;}
-      a { text-decoration: none; }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  </head>
-  <body>
-    <div class="container">
-      {% block body %}{% endblock %}
-    </div>
-  </body>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FirstMover</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; padding:24px; background:#f8fafc; color:#0f172a; }
+    .card { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:18px 18px 22px; box-shadow:0 2px 10px rgba(0,0,0,0.04); }
+    .row { display:flex; gap:18px; }
+    .col { flex:1 1 0; min-width:320px; }
+    .btn { display:inline-block; background:#0ea5e9; color:white; padding:8px 12px; border-radius:10px; text-decoration:none; }
+    .btn.secondary { background:#e2e8f0; color:#0f172a; }
+    .platform { border-top:1px dashed #e2e8f0; padding-top:12px; margin-top:12px; }
+    .pill { display:inline-block; background:#0ea5e9; color:#fff; padding:2px 8px; border-radius:999px; font-size:12px; }
+    .pill.secondary { background:#e2e8f0; color:#0f172a; }
+    select, input { height:34px; border:1px solid #e2e8f0; border-radius:8px; padding:0 8px; }
+    .note { color:#475569; font-size:14px; }
+  </style>
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
 </html>
