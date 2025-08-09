@@ -4,6 +4,9 @@
   <div class="card">
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
+    {% if not platforms or not platforms|selectattr("name","equalto","Gmail")|selectattr("percentile")|list %}
+      <p class="note">Missing Gmail date? <a href="{{ url_for('login_google') }}">Grant Gmail access</a>.</p>
+    {% endif %}
     {% if score %}
       <p style="font-size:22px; font-weight:700;">Composite Score: {{ score }}/100</p>
     {% else %}

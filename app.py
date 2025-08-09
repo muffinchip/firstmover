@@ -45,6 +45,15 @@ with open(DATA_PATH, "r") as f:
     CURVES = json.load(f)
 
 # --- Helpers ---
+def token_has_gmail_scope(token: dict) -> bool:
+    """Return True if the OAuth token includes the Gmail read-only scope."""
+    if not token:
+        return False
+    scopes = token.get("scope") or token.get("scopes")
+    if isinstance(scopes, str):
+        scopes = scopes.split()
+    return bool(scopes and "https://www.googleapis.com/auth/gmail.readonly" in scopes)
+
 def iso_to_epoch_ms(s):
     dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     return int(dt.timestamp() * 1000)
@@ -154,12 +163,21 @@ def index():
 @app.route("/login/google")
 def login_google():
     redirect_uri = url_for("auth_google", _external=True)
-    return oauth.google.authorize_redirect(redirect_uri)
+    # Always prompt so users see the Gmail checkbox; allow upgrading scopes
+    return oauth.google.authorize_redirect(
+        redirect_uri,
+        prompt="consent",
+        access_type="offline",
+        include_granted_scopes="true",
+        scope="openid email https://www.googleapis.com/auth/gmail.readonly",
+    )
 
 @app.route("/auth/google")
 def auth_google():
     token = oauth.google.authorize_access_token()
     session["google_token"] = token
+    if not token_has_gmail_scope(token):
+        return render_template("need_gmail.html")
     return redirect(url_for("results"))
 
 @app.route("/logout")
@@ -169,7 +187,7 @@ def logout():
 
 def get_google_credentials():
     token = session.get("google_token")
-    if not token:
+    if not token or not token_has_gmail_scope(token):
         return None
     return Credentials(
         token=token["access_token"],
@@ -191,7 +209,7 @@ def results():
     platforms = []
     percentiles = []
 
-    # Gmail (if logged in)
+    # Gmail (if logged in with scope)
     creds = get_google_credentials()
     if creds:
         try:
@@ -208,6 +226,8 @@ def results():
                 platforms.append({"name": "Gmail", "joined": "Unavailable", "percentile": None, "note": "Could not determine oldest message."})
         except Exception as e:
             platforms.append({"name": "Gmail", "joined": "Error", "percentile": None, "note": str(e)})
+    else:
+        platforms.append({"name": "Gmail", "joined": "Not connected", "percentile": None, "note": "Grant Gmail Read-Only to estimate your start date."})
 
     # Twitter/X by username (optional)
     if twitter_username:
@@ -230,6 +250,18 @@ def results():
 @app.route("/healthz")
 def healthz():
     return jsonify({"ok": True})
+
+# Optional: minimal diag
+@app.route("/diag")
+def diag():
+    token = session.get("google_token")
+    safe = {
+        "GOOGLE_CLIENT_ID_set": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "GOOGLE_CLIENT_SECRET_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
+        "has_token": bool(token),
+        "token_has_gmail_scope": token_has_gmail_scope(token) if token else False,
+    }
+    return jsonify(safe)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
