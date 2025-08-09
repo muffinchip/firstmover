@@ -23,10 +23,66 @@
               {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
             </div>
             <div class="note">Joined: {{ p.joined }} {% if p.username %} ({{ p.username }}){% endif %}</div>
+            {% if p.joined_users and p.today_users %}
+              <p style="margin:6px 0 0 0;">
+                You joined {{ p.name }} before <strong>{{ p.narrative_percent }}%</strong> of current users.
+                When you joined, {{ p.name }} had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
+                users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today —
+                {{ p.narrative_fact }}.
+              </p>
+            {% endif %}
+
+            {% if p.chart %}
+              <div style="margin-top:10px;">
+                <canvas id="curve-{{ loop.index }}"></canvas>
+              </div>
+              <script>
+                (function(){
+                  const labels = {{ p.chart.labels|tojson }};
+                  const values = {{ p.chart.values|tojson }};
+                  const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
+
+                  const datasets = [{
+                    type: 'line',
+                    label: 'Cumulative users',
+                    data: values,
+                    fill: false,
+                    tension: 0.1
+                  }];
+
+                  {% if p.join_label %}
+                    const joinLabel = "{{ p.join_label }}";
+                    const idx = labels.indexOf(joinLabel);
+                    if (idx >= 0) {
+                      const top = Math.max.apply(null, values) * 1.05;
+                      const base = 0;
+                      const vDataTop = new Array(values.length).fill(null); vDataTop[idx] = top;
+                      const vDataBase = new Array(values.length).fill(null); vDataBase[idx] = base;
+                      datasets.push({ type: 'line', data: vDataTop, borderDash: [6,4], pointRadius: 0 });
+                      datasets.push({ type: 'line', data: vDataBase, borderDash: [6,4], pointRadius: 0 });
+                    }
+                  {% endif %}
+
+                  new Chart(ctx, {
+                    type: 'line',
+                    data: { labels: labels, datasets: datasets },
+                    options: {
+                      plugins: { legend: { display: false } },
+                      scales: {
+                        x: { ticks: { maxRotation: 0, autoSkip: true } },
+                        y: { beginAtZero: true }
+                      }
+                    }
+                  });
+                })();
+              </script>
+            {% endif %}
+
             {% if p.note %}<div class="note">Note: {{ p.note }}</div>{% endif %}
           </div>
         {% endfor %}
       </div>
+
       <div class="col">
         <h3>Your place on the curve</h3>
         <canvas id="curveChart"></canvas>
@@ -35,6 +91,7 @@
   </div>
 
   <script>
+    // Existing bar chart for percentiles
     const labels = {{ platforms|map(attribute='name')|list|tojson }};
     const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
     const ctx = document.getElementById('curveChart').getContext('2d');

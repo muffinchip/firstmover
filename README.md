@@ -1,6 +1,9 @@
-# FirstMover — Gmail Scope UX Update
+# FirstMover — Analytics Update
 
-- Clear Gmail permission instructions on the landing page
-- Force consent + explicit scopes on Google login
-- Interstitial re-consent if Gmail scope missing
-- Results page nudge to connect Gmail
+Adds:
+- Narrative analytics per platform (users then vs now, milestone fact)
+- Cumulative users chart with dashed vertical "you joined" line
+- Gmail scope UX (re-consent & hints)
+- Render-friendly deploy config
+
+**Note:** Numbers in `data/adoption_curves.json` are illustrative seeds. Replace with your preferred sources for accuracy.

@@ -33,14 +33,6 @@ oauth.register(
 )
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
-if not os.path.exists(DATA_PATH):
-    os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-    with open(DATA_PATH, "w") as f:
-        json.dump({
-            "gmail": {"launch_date": "2004-04-01", "maturity_date": "2012-01-01"},
-            "twitter": {"launch_date": "2006-03-21", "maturity_date": "2014-01-01"}
-        }, f, indent=2)
-
 with open(DATA_PATH, "r") as f:
     CURVES = json.load(f)
 
@@ -155,6 +147,59 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
 def ms_to_datestr(ms):
     return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
+# --------- Analytics helpers (timeline + milestones) ---------
+def parse_timeline(platform):
+    meta = CURVES.get(platform, {})
+    tl = meta.get("timeline") or []
+    tl = sorted([(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d, u in tl],
+                key=lambda x: x[0])
+    return tl
+
+def users_at(platform, when_ms):
+    tl = parse_timeline(platform)
+    if not tl:
+        return None
+    when = datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
+    if when <= tl[0][0]: return tl[0][1]
+    if when >= tl[-1][0]: return tl[-1][1]
+    for (d0, u0), (d1, u1) in zip(tl, tl[1: ]):
+        if d0 <= when <= d1:
+            span = (d1 - d0).total_seconds()
+            frac = (when - d0).total_seconds() / span if span else 0.0
+            return round(u0 + frac * (u1 - u0))
+    return tl[-1][1]
+
+def users_today(platform):
+    tl = parse_timeline(platform)
+    return tl[-1][1] if tl else None
+
+def pick_milestone(platform, joined_users):
+    meta = CURVES.get(platform, {})
+    milestones = meta.get("milestones") or []
+    milestones = sorted(milestones, key=lambda m: m["users"])
+    after = next((m for m in milestones if joined_users < m["users"]), None)
+    if after:
+        return f"before the platform {after['text']}"
+    before = [m for m in milestones if joined_users >= m["users"]]
+    if before:
+        return f"shortly after it {before[-1]['text']}"
+    return "very early in its growth"
+
+def timeline_series(platform):
+    tl = parse_timeline(platform)
+    return {
+        "labels": [d.strftime("%Y-%m-%d") for d, _ in tl],
+        "values": [u for _, u in tl],
+    }
+
+def nearest_label_for_ts(platform, when_ms):
+    tl = parse_timeline(platform)
+    if not tl:
+        return None
+    when = datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
+    best = min(tl, key=lambda du: abs((du[0]-when).total_seconds()))
+    return best[0].strftime("%Y-%m-%d")
+
 # --- Routes ---
 @app.route("/")
 def index():
@@ -217,10 +262,19 @@ def results():
             if gmail_ms:
                 p = percentile_from_dates("gmail", gmail_ms)
                 percentiles.append(p)
+                joined_u = users_at("gmail", gmail_ms)
+                today_u = users_today("gmail")
+                join_label = nearest_label_for_ts("gmail", gmail_ms)
                 platforms.append({
                     "name": "Gmail",
                     "joined": ms_to_datestr(gmail_ms),
                     "percentile": round(100*p, 1),
+                    "joined_users": joined_u,
+                    "today_users": today_u,
+                    "narrative_percent": round(100 * joined_u / today_u, 1) if (joined_u and today_u) else None,
+                    "narrative_fact": pick_milestone("gmail", joined_u) if joined_u else None,
+                    "chart": timeline_series("gmail"),
+                    "join_label": join_label
                 })
             else:
                 platforms.append({"name": "Gmail", "joined": "Unavailable", "percentile": None, "note": "Could not determine oldest message."})
@@ -235,11 +289,20 @@ def results():
         if t_ms:
             p = percentile_from_dates("twitter", t_ms)
             percentiles.append(p)
+            joined_u = users_at("twitter", t_ms)
+            today_u = users_today("twitter")
+            join_label = nearest_label_for_ts("twitter", t_ms)
             platforms.append({
                 "name": "Twitter/X",
                 "joined": ms_to_datestr(t_ms),
                 "percentile": round(100*p, 1),
-                "username": twitter_username
+                "username": twitter_username,
+                "joined_users": joined_u,
+                "today_users": today_u,
+                "narrative_percent": round(100 * joined_u / today_u, 1) if (joined_u and today_u) else None,
+                "narrative_fact": pick_milestone("twitter", joined_u) if joined_u else None,
+                "chart": timeline_series("twitter"),
+                "join_label": join_label
             })
         else:
             platforms.append({"name": "Twitter/X", "joined": "Unavailable", "percentile": None, "username": twitter_username, "note": "API token missing or lookup failed."})
