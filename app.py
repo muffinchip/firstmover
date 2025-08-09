@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 from datetime import datetime, timedelta, timezone, date
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
@@ -7,6 +8,64 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+# --- DB (lightweight) ---
+from sqlalchemy import create_engine, text
+
+DB_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DB_URL, pool_pre_ping=True) if DB_URL else None
+
+def init_db():
+    if not engine:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS firstmover_results (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT,
+            run_id TEXT,
+            platform TEXT,
+            percentile NUMERIC,
+            verified BOOLEAN,
+            join_date DATE,
+            source TEXT,
+            joined_users BIGINT,
+            today_users BIGINT,
+            composite_overall NUMERIC,
+            composite_verified NUMERIC,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        """))
+init_db()
+
+def save_results(uid, platforms, score, score_verified):
+    """Persist one row per platform + composite values for later benchmarking."""
+    if not engine or not platforms:
+        return
+    run_id = str(uuid.uuid4())
+    with engine.begin() as conn:
+        for p in platforms:
+            conn.execute(text("""
+                INSERT INTO firstmover_results
+                (user_id, run_id, platform, percentile, verified, join_date, source,
+                 joined_users, today_users, composite_overall, composite_verified)
+                VALUES
+                (:user_id, :run_id, :platform, :percentile, :verified, :join_date, :source,
+                 :joined_users, :today_users, :composite_overall, :composite_verified)
+            """), {
+                "user_id": uid,
+                "run_id": run_id,
+                "platform": p["name"],
+                "percentile": p.get("percentile"),
+                "verified": bool(p.get("verified")),
+                "join_date": p.get("join_iso"),
+                "source": "gmail" if p.get("verified") else "manual",
+                "joined_users": p.get("joined_users"),
+                "today_users": p.get("today_users"),
+                "composite_overall": score,
+                "composite_verified": score_verified
+            })
+
+# --- App ---
 def getenv(name, default=None):
     v = os.getenv(name, default)
     if v is None:
@@ -29,7 +88,7 @@ oauth.register(
     client_kwargs={"scope": "openid email https://www.googleapis.com/auth/gmail.readonly"},
 )
 
-# ---- safe curve loader
+# ---- curves (safe loader)
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
 def load_curves(path):
     try:
@@ -42,7 +101,7 @@ def load_curves(path):
         ]}}
 CURVES = load_curves(DATA_PATH)
 
-# ---------- Metric tags & pretty names ----------
+# ---------- labels ----------
 METRIC_TAGS = {
     "gmail": "Users",
     "facebook": "MAU",
@@ -67,7 +126,6 @@ PRETTY_NAMES = {
     "reddit": "Reddit",
     "amazonprime": "Amazon Prime",
 }
-# Simple logo URLs (SVG/PNG). You can swap to /static later.
 LOGO_URLS = {
     "gmail": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png",
     "facebook": "https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png",
@@ -81,7 +139,7 @@ LOGO_URLS = {
     "amazonprime": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Prime_logo.png"
 }
 
-# ---------- Utilities ----------
+# ---------- utils ----------
 def token_has_gmail_scope(token: dict) -> bool:
     if not token:
         return False
@@ -128,7 +186,7 @@ def months_to_human(m: int) -> str:
         return "0 months"
     return " ".join(parts)
 
-# ---------- Gmail helpers ----------
+# ---------- Gmail ----------
 def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
@@ -149,7 +207,6 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Fast baseline (binary search) — avoids timeouts
 def gmail_has_messages_before(service, dt):
     q = f"before:{dt.strftime('%Y/%m/%d')}"
     resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
@@ -184,10 +241,9 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
             break
     if not last_id:
         return None
-    msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
+    msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Gmail welcome queries (Facebook re-enabled)
 WELCOME_QUERIES = {
     "facebook":   'from:(facebookmail.com OR notify@facebookmail.com) (subject:(Welcome) OR subject:(Confirm))',
     "instagram":  'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
@@ -200,7 +256,7 @@ WELCOME_QUERIES = {
     "amazonprime": 'from:(no-reply@amazon.com OR prime@amazon.com) (subject:(Welcome to Amazon Prime) OR subject:(Your Amazon Prime) OR subject:(Confirm))'
 }
 
-# ---------- Adoption math ----------
+# ---------- curves math ----------
 def parse_timeline(platform):
     meta = CURVES.get(platform, {})
     tl = meta.get("timeline") or []
@@ -248,14 +304,14 @@ def timeline_series_time(platform):
 def early_adopter_percentile(joined_users, today_users):
     if joined_users is None or today_users in (None, 0):
         return None
-    return round(100 * (joined_users / today_users), 1)  # smaller = earlier
+    return round(100 * (joined_users / today_users), 1)  # lower is earlier
 
 def joined_before_percent(joined_users, today_users):
     if joined_users is None or today_users in (None, 0):
         return None
     return round(100 * (1 - (joined_users / today_users)), 1)
 
-# ---------- Routes ----------
+# ---------- routes ----------
 @app.route("/")
 def index():
     months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
@@ -265,6 +321,8 @@ def index():
 
 @app.route("/login/google")
 def login_google():
+    # generate anon id if no Google id later
+    session.setdefault("uid", session.get("uid") or str(uuid.uuid4()))
     redirect_uri = url_for("auth_google", _external=True)
     return oauth.google.authorize_redirect(
         redirect_uri,
@@ -278,6 +336,9 @@ def login_google():
 def auth_google():
     token = oauth.google.authorize_access_token()
     session["google_token"] = token
+    # try to keep stable id
+    info = token.get("userinfo") or {}
+    session["uid"] = info.get("sub") or info.get("email") or session.get("uid") or str(uuid.uuid4())
     if not token_has_gmail_scope(token):
         return render_template("need_gmail.html")
     return redirect(url_for("results"))
@@ -304,26 +365,18 @@ def get_google_credentials():
 def results():
     platform_keys = ["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
 
-    # 1) Collect manual Month/Year entries
-    manual = {}  # key -> ms
-    if request.method == "POST":
-        for key in platform_keys:
-            m = request.form.get(f"{key}_join_month")
-            y = request.form.get(f"{key}_join_year")
-            if m and y:
-                ms = month_year_to_ms(m, y)
-                if ms:
-                    manual[key] = ms
-    else:
-        for key in platform_keys:
-            m = request.args.get(f"{key}_join_month")
-            y = request.args.get(f"{key}_join_year")
-            if m and y:
-                ms = month_year_to_ms(m, y)
-                if ms:
-                    manual[key] = ms
+    # manual Month/Year entries
+    manual = {}
+    src = (request.form if request.method == "POST" else request.args)
+    for key in platform_keys:
+        m = src.get(f"{key}_join_month")
+        y = src.get(f"{key}_join_year")
+        if m and y:
+            ms = month_year_to_ms(m, y)
+            if ms:
+                manual[key] = ms
 
-    # 2) Gmail detections (verified)
+    # Gmail (verified)
     gmail_hits = {}
     creds = get_google_credentials()
     if creds:
@@ -338,7 +391,7 @@ def results():
             if ts:
                 gmail_hits[key] = ts
 
-    # Baseline Gmail (optional card) using fast binary search
+    # Gmail baseline (first email)
     gmail_baseline_ts = None
     if creds:
         try:
@@ -346,12 +399,11 @@ def results():
         except Exception as e:
             print("gmail baseline failed:", e)
 
-    # 3) Resolve conflicts with 12-month rule
-    resolved = {}  # key -> dict(date_ms, verified_bool, email_hint_ms or None)
+    # Resolve conflicts (12 months rule)
+    resolved = {}
     for key in set(list(manual.keys()) + list(gmail_hits.keys())):
         m_ms = manual.get(key)
         g_ms = gmail_hits.get(key)
-
         if m_ms and g_ms:
             m_d = datetime.fromtimestamp(m_ms/1000, tz=timezone.utc).date()
             g_d = datetime.fromtimestamp(g_ms/1000, tz=timezone.utc).date()
@@ -364,12 +416,11 @@ def results():
         elif m_ms:
             resolved[key] = {"date_ms": m_ms, "verified": False, "email_hint_ms": None}
 
-    # 4) Build platform cards + compute percentiles
+    # Build cards & percentiles
     platforms = []
     percentiles_all = []
     percentiles_verified = []
 
-    # Gmail baseline card
     if gmail_baseline_ts:
         add_platform_card(platforms, percentiles_all, percentiles_verified, "gmail", gmail_baseline_ts, verified=True)
 
@@ -378,31 +429,28 @@ def results():
             continue
         add_platform_card(
             platforms, percentiles_all, percentiles_verified,
-            key, info["date_ms"], verified=info["verified"],
-            email_hint_ms=info["email_hint_ms"]
+            key, info["date_ms"], verified=info["verified"], email_hint_ms=info["email_hint_ms"]
         )
 
-    # Composite percentiles
     score_all = round(100 * (sum([p/100.0 for p in percentiles_all]) / len(percentiles_all)), 1) if percentiles_all else None
     score_verified = round(100 * (sum([p/100.0 for p in percentiles_verified]) / len(percentiles_verified)), 1) if percentiles_verified else None
 
-    # Only render platforms we actually have dates for
+    # Only ones with dates
     platforms = [p for p in platforms if p.get("join_iso")]
 
-    # Data for bar chart + badges + logos
+    # Chart data
     labels = [p["name"] for p in platforms]
     values = [p["percentile"] for p in platforms]
     verified_flags = [bool(p.get("verified")) for p in platforms]
-
-    # Provide a mapping of label -> logo for chart plugin convenience
     label_to_logo = {}
     for p in platforms:
-        # reverse lookup platform key by pretty name
-        key = None
-        for k, pretty in PRETTY_NAMES.items():
-            if pretty == p["name"]:
-                key = k; break
-        label_to_logo[p["name"]] = LOGO_URLS.get(key, "")
+        k = next((kk for kk, vv in PRETTY_NAMES.items() if vv == p["name"]), None)
+        label_to_logo[p["name"]] = LOGO_URLS.get(k, "")
+
+    # Save to DB (unconditional; flip to conditional if you add a consent control)
+    uid = session.get("uid") or str(uuid.uuid4())
+    session["uid"] = uid
+    save_results(uid, platforms, score_all, score_verified)
 
     return render_template(
         "results.html",
@@ -463,6 +511,7 @@ def diag():
         "GOOGLE_CLIENT_SECRET_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
         "has_token": bool(token),
         "token_has_gmail_scope": token_has_gmail_scope(token) if token else False,
+        "db_connected": bool(engine),
     }
     return jsonify(safe)
 

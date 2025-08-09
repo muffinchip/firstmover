@@ -6,14 +6,13 @@
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
 
-    <!-- Composite scores above bar chart -->
+    <!-- composites (top) -->
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-top:8px;">
       {% if score is not none %}
         <div><strong>Composite Percentile:</strong> {{ score }}</div>
       {% else %}
         <div><strong>Composite Percentile:</strong> N/A</div>
       {% endif %}
-
       {% if score_verified is not none %}
         <div><strong>Verified Composite Percentile:</strong> {{ score_verified }} <span class="pill">✓ verified</span></div>
       {% else %}
@@ -34,7 +33,7 @@
                   <span class="pill secondary" title="Metric used for this platform">{{ p.metric_tag }}</span>
                 {% endif %}
                 {% if p.verified %}
-                  <span class="pill" title="Verified from Gmail">✓ verified</span>
+                  <span class="pill" title="Verified via Gmail">✓ verified</span>
                 {% else %}
                   <span class="pill secondary" title="Self-reported">self-report</span>
                 {% endif %}
@@ -53,9 +52,11 @@
 
             {% if p.joined_users and p.today_users %}
               <p style="margin:6px 0 0 0;">
-                You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch, before <strong>{{ p.narrative_percent }}%</strong> of current users.
-                When you joined {{ p.name }} it had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
-                users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
+                You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch,
+                before <strong>{{ p.narrative_percent }}%</strong> of current users.
+                When you joined {{ p.name }} it had approximately
+                <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
+                <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
               </p>
             {% endif %}
 
@@ -153,7 +154,6 @@
   </div>
 
   <script>
-    // Bar chart of percentiles (lower = earlier), with labels and verified badges under each bar + logos.
     const labels = {{ chart_labels|tojson }};
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
@@ -162,7 +162,7 @@
 
     const ctx = document.getElementById('curveChart').getContext('2d');
 
-    // Preload logo images
+    // Preload logos
     const logos = {};
     Object.entries(labelToLogo).forEach(([label, url]) => {
       if (!url) return;
@@ -190,29 +190,28 @@
       }
     };
 
+    // Clean label + verified badge + logo under each bar
     const underBarLabels = {
       id: 'underBarLabels',
-      afterDatasetsDraw(chart, args, opts) {
+      afterDatasetsDraw(chart) {
         const { ctx, scales: { x, y } } = chart;
+        const base = y.getPixelForValue(0);
         chart.data.datasets[0].data.forEach((val, i) => {
           const xPos = x.getPixelForValue(i);
-          const yBase = y.getPixelForValue(0);
-
           const label = labels[i];
           const verified = verifiedFlags[i];
-          const text = (verified ? '✓ ' : '') + val + 'th';
+          const txt = (verified ? '✓ ' : '') + val + 'th';
 
           ctx.save();
           ctx.textAlign = 'center';
           ctx.textBaseline = 'top';
           ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-          ctx.fillText(text, xPos, yBase + 6);
+          ctx.fillText(txt, xPos, base + 6);
 
-          // Draw logo under the text if available
           const img = logos[label];
           if (img && img.complete) {
-            const size = 18; // logo size
-            ctx.drawImage(img, xPos - size/2, yBase + 22, size, size);
+            const size = 18;
+            ctx.drawImage(img, xPos - size/2, base + 22, size, size);
           }
           ctx.restore();
         });
