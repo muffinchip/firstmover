@@ -1,114 +1,131 @@
-
-{% extends "layout.html" %}
-{% block body %}
-  <div class="card">
-    <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
-    <h2>Your Early Adopter Results</h2>
-    {% if not platforms or not platforms|selectattr("name","equalto","Gmail")|selectattr("percentile")|list %}
-      <p class="note">Missing Gmail date? <a href="{{ url_for('login_google') }}">Grant Gmail access</a>.</p>
-    {% endif %}
-    {% if score %}
-      <p style="font-size:22px; font-weight:700;">Composite Score: {{ score }}/100</p>
-    {% else %}
-      <p class="note">Add at least one platform to compute a composite score.</p>
-    {% endif %}
-
-    <div class="row">
-      <div class="col">
-        <h3>Platforms</h3>
-        {% for p in platforms %}
-          <div class="platform">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div><strong>{{ p.name }}</strong></div>
-              {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
-            </div>
-            <div class="note">Joined: {{ p.joined }} {% if p.username %} ({{ p.username }}){% endif %}</div>
-            {% if p.joined_users and p.today_users %}
-              <p style="margin:6px 0 0 0;">
-                You joined {{ p.name }} before <strong>{{ p.narrative_percent }}%</strong> of current users.
-                When you joined, {{ p.name }} had approximately <strong>{{ "{:,}".format(p.joined_users) }}</strong>
-                users compared to <strong>{{ "{:,}".format(p.today_users) }}</strong> today —
-                {{ p.narrative_fact }}.
-              </p>
-            {% endif %}
-
-            {% if p.chart %}
-              <div style="margin-top:10px;">
-                <canvas id="curve-{{ loop.index }}"></canvas>
-              </div>
-              <script>
-                (function(){
-                  const labels = {{ p.chart.labels|tojson }};
-                  const values = {{ p.chart.values|tojson }};
-                  const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
-
-                  const datasets = [{
-                    type: 'line',
-                    label: 'Cumulative users',
-                    data: values,
-                    fill: false,
-                    tension: 0.1
-                  }];
-
-                  {% if p.join_label %}
-                    const joinLabel = "{{ p.join_label }}";
-                    const idx = labels.indexOf(joinLabel);
-                    if (idx >= 0) {
-                      const top = Math.max.apply(null, values) * 1.05;
-                      const base = 0;
-                      const vDataTop = new Array(values.length).fill(null); vDataTop[idx] = top;
-                      const vDataBase = new Array(values.length).fill(null); vDataBase[idx] = base;
-                      datasets.push({ type: 'line', data: vDataTop, borderDash: [6,4], pointRadius: 0 });
-                      datasets.push({ type: 'line', data: vDataBase, borderDash: [6,4], pointRadius: 0 });
-                    }
-                  {% endif %}
-
-                  new Chart(ctx, {
-                    type: 'line',
-                    data: { labels: labels, datasets: datasets },
-                    options: {
-                      plugins: { legend: { display: false } },
-                      scales: {
-                        x: { ticks: { maxRotation: 0, autoSkip: true } },
-                        y: { beginAtZero: true }
-                      }
-                    }
-                  });
-                })();
-              </script>
-            {% endif %}
-
-            {% if p.note %}<div class="note">Note: {{ p.note }}</div>{% endif %}
-          </div>
-        {% endfor %}
-      </div>
-
-      <div class="col">
-        <h3>Your place on the curve</h3>
-        <canvas id="curveChart"></canvas>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // Existing bar chart for percentiles
-    const labels = {{ platforms|map(attribute='name')|list|tojson }};
-    const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
-    const ctx = document.getElementById('curveChart').getContext('2d');
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Percentile (0–100)',
-          data: data
-        }]
-      },
-      options: {
-        scales: {
-          y: { beginAtZero: true, max: 100 }
-        }
-      }
-    });
-  </script>
-{% endblock %}
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <title></title>
+  <meta name="Generator" content="Cocoa HTML Writer">
+  <meta name="CocoaVersion" content="2575.6">
+  <style type="text/css">
+    p.p1 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Times; -webkit-text-stroke: #000000}
+    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px Times; -webkit-text-stroke: #000000; min-height: 14.0px}
+    span.s1 {font-kerning: none}
+  </style>
+</head>
+<body>
+<p class="p1"><span class="s1">{% extends "layout.html" %}</span></p>
+<p class="p1"><span class="s1">{% block body %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">  </span>&lt;div class="card"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>&lt;a href="{{ url_for('index') }}" class="btn secondary"&gt;← Start over&lt;/a&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>&lt;h2&gt;Your Early Adopter Results&lt;/h2&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>{% if not platforms or not platforms|selectattr("name","equalto","Gmail")|selectattr("percentile")|list %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;p class="note"&gt;Missing Gmail date? &lt;a href="{{ url_for('login_google') }}"&gt;Grant Gmail access&lt;/a&gt;.&lt;/p&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>{% endif %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>{% if score %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;p style="font-size:22px; font-weight:700;"&gt;Composite Score: {{ score }}/100&lt;/p&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>{% else %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;p class="note"&gt;Add at least one platform to compute a composite score.&lt;/p&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>{% endif %}</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>&lt;div class="row"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;div class="col"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>&lt;h3&gt;Platforms&lt;/h3&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>{% for p in platforms %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">          </span>&lt;div class="platform"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>&lt;div style="display:flex;justify-content:space-between;align-items:center;"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;div&gt;&lt;strong&gt;{{ p.name }}&lt;/strong&gt;&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>{% if p.percentile is not none %}&lt;span class="pill"&gt;{{ p.percentile }}th percentile&lt;/span&gt;{% endif %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>&lt;div class="note"&gt;Joined: {{ p.joined }} {% if p.username %} ({{ p.username }}){% endif %}&lt;/div&gt;</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>{% if p.joined_users and p.today_users %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;p style="margin:6px 0 0 0;"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>You joined {{ p.name }} before &lt;strong&gt;{{ p.narrative_percent }}%&lt;/strong&gt; of current users.</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>When you joined, {{ p.name }} had approximately &lt;strong&gt;{{ "{:,}".format(p.joined_users) }}&lt;/strong&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>users compared to &lt;strong&gt;{{ "{:,}".format(p.today_users) }}&lt;/strong&gt; today —</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>{{ p.narrative_fact }}.</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;/p&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>{% endif %}</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>{% if p.chart %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;div style="margin-top:10px;"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>&lt;canvas id="curve-{{ loop.index }}"&gt;&lt;/canvas&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;script&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>(function(){</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>const labels = {{ p.chart['labels']|tojson }};</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>const values = {{ p.chart['values']|tojson }};</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>const datasets = [{</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>type: 'line',</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>label: 'Cumulative users',</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>data: values,</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>fill: false,</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>tension: 0.1</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>}];</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>{% if p.join_label %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>const joinLabel = "{{ p.join_label }}";</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>const idx = labels.indexOf(joinLabel);</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>if (idx &gt;= 0) {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>const top = Math.max.apply(null, values) * 1.05;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>const base = 0;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>const vDataTop = new Array(values.length).fill(null); vDataTop[idx] = top;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>const vDataBase = new Array(values.length).fill(null); vDataBase[idx] = base;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>datasets.push({ type: 'line', data: vDataTop, borderDash: [6,4], pointRadius: 0 });</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>datasets.push({ type: 'line', data: vDataBase, borderDash: [6,4], pointRadius: 0 });</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>{% endif %}</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>new Chart(ctx, {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>type: 'line',</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>data: { labels: labels, datasets: datasets },</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>options: {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>plugins: { legend: { display: false } },</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>scales: {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                        </span>x: { ticks: { maxRotation: 0, autoSkip: true } },</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                        </span>y: { beginAtZero: true }</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                      </span>}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                    </span>}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                  </span>});</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">                </span>})();</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">              </span>&lt;/script&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>{% endif %}</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">            </span>{% if p.note %}&lt;div class="note"&gt;Note: {{ p.note }}&lt;/div&gt;{% endif %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">          </span>&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>{% endfor %}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;div class="col"&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>&lt;h3&gt;Your place on the curve&lt;/h3&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>&lt;canvas id="curveChart"&gt;&lt;/canvas&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>&lt;/div&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">  </span>&lt;/div&gt;</span></p>
+<p class="p2"><span class="s1"></span><br></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">  </span>&lt;script&gt;</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>// Existing bar chart for percentiles</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>const labels = {{ platforms|map(attribute='name')|list|tojson }};</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v =&gt; v === null ? 0 : v);</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>const ctx = document.getElementById('curveChart').getContext('2d');</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>new Chart(ctx, {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>type: 'bar',</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>data: {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>labels: labels,</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>datasets: [{</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">          </span>label: 'Percentile (0–100)',</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">          </span>data: data</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>}]</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>},</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>options: {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>scales: {</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">          </span>y: { beginAtZero: true, max: 100 }</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">        </span>}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">      </span>}</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">    </span>});</span></p>
+<p class="p1"><span class="s1"><span class="Apple-converted-space">  </span>&lt;/script&gt;</span></p>
+<p class="p1"><span class="s1">{% endblock %}</span></p>
+</body>
+</html>
