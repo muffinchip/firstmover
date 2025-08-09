@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -29,17 +29,17 @@ oauth.register(
     client_kwargs={"scope": "openid email https://www.googleapis.com/auth/gmail.readonly"},
 )
 
+# ---- safer loader so a JSON typo won't crash the app
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
-
 def load_curves(path):
     try:
         with open(path, "r") as f:
             return json.load(f)
     except Exception as e:
         print("ERROR loading adoption_curves.json:", e)
-        # Minimal fallback so the app still boots
-        return {"gmail": {"launch_date":"2004-04-01","timeline":[["2004-04-01",0],["2012-01-01",350000000],["2018-10-26",1500000000],["2025-01-01",1800000000]]}}
-
+        return {"gmail": {"launch_date":"2004-04-01","timeline":[
+            ["2004-04-01",0],["2012-01-01",350000000],["2018-10-26",1500000000],["2025-01-01",1800000000]
+        ]}}
 CURVES = load_curves(DATA_PATH)
 
 # ---------- Metric tags & pretty names ----------
@@ -99,7 +99,7 @@ def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 def gmail_oldest_for_query(credentials: Credentials, query: str):
-    """Find the oldest message matching the Gmail search query by walking to the last page."""
+    """Find the oldest message matching the Gmail search query (walk to last page)."""
     svc = gmail_service(credentials)
     page_token = None
     last_id = None
@@ -114,6 +114,50 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     if not last_id:
         return None
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
+    return int(msg.get("internalDate"))
+
+def gmail_has_messages_before(service, dt):
+    q = f"before:{dt.strftime('%Y/%m/%d')}"
+    resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
+    return bool(resp.get("messages"))
+
+def gmail_find_earliest_date(service):
+    # binary search on time window
+    lo = datetime(2004, 1, 1, tzinfo=timezone.utc)
+    hi = datetime.now(timezone.utc) + timedelta(days=1)
+    for _ in range(32):
+        mid = lo + (hi - lo) / 2
+        if gmail_has_messages_before(service, mid):
+            hi = mid
+        else:
+            lo = mid
+    # approximate earliest day with a small buffer
+    return (hi - timedelta(days=1)).date()
+
+def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
+    """
+    Fastest way to approximate the oldest message time WITHOUT paging the entire mailbox.
+    We binary-search by date, then fetch within a small window around that date.
+    """
+    service = gmail_service(credentials)
+    earliest_day = gmail_find_earliest_date(service)
+    start = earliest_day - timedelta(days=3)
+    end = earliest_day + timedelta(days=11)
+    q = f"after:{start.strftime('%Y/%m/%d')} before:{end.strftime('%Y/%m/%d')}"
+    # Take the last page of this tiny window instead of the whole mailbox
+    page_token = None
+    last_id = None
+    while True:
+        resp = service.users().messages().list(userId="me", maxResults=500, pageToken=page_token, q=q).execute()
+        ids = resp.get("messages", [])
+        if ids:
+            last_id = ids[-1]["id"]
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    if not last_id:
+        return None
+    msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
 # Gmail welcome queries (NO Facebook due to .edu early signups)
@@ -160,7 +204,7 @@ def timeline_series_time(platform):
     if not tl:
         return {"points_m": []}
     points = [{"x": d.strftime("%Y-%m-%d"), "y": round(u/1_000_000, 3)} for d, u in tl]
-    # Extend to 'today' using the last known value (purely visual)
+    # Extend to 'today' visually
     today = datetime.now(timezone.utc).date()
     last_date = tl[-1][0].date()
     if last_date < today:
@@ -168,10 +212,9 @@ def timeline_series_time(platform):
     return {"points_m": points}
 
 def early_adopter_percentile(joined_users, today_users):
-    # small number = earlier (top percentile)
     if joined_users is None or today_users in (None, 0):
         return None
-    return round(100 * (joined_users / today_users), 1)
+    return round(100 * (joined_users / today_users), 1)  # smaller = earlier
 
 def joined_before_percent(joined_users, today_users):
     if joined_users is None or today_users in (None, 0):
@@ -181,7 +224,6 @@ def joined_before_percent(joined_users, today_users):
 # ---------- Routes ----------
 @app.route("/")
 def index():
-    # Month names and year range for selects
     months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
     current_year = datetime.now(timezone.utc).year
     years = list(range(current_year, 1999, -1))  # current -> 2000
@@ -264,13 +306,13 @@ def results():
             if ts and key not in manual_dates:
                 manual_dates[key] = ts
 
-        # Optionally include Gmail itself as a "platform" (oldest message in mailbox)
+        # Include Gmail baseline using FAST binary search (no full mailbox paging)
         try:
-            ts_mailbox = gmail_oldest_for_query(creds, "")
+            ts_mailbox = gmail_oldest_message_epoch_ms_binary_search(creds)
             if ts_mailbox:
                 add_platform_card(platforms, percentiles, "gmail", ts_mailbox)
-        except Exception:
-            pass
+        except Exception as e:
+            print("gmail baseline failed:", e)
 
     # Add all platforms we have a date for
     for key, ts in manual_dates.items():
@@ -278,12 +320,9 @@ def results():
             continue
         add_platform_card(platforms, percentiles, key, ts)
 
-    # Composite (small = earlier).
+    # Composite (small = earlier)
     score = round(100 * (sum(percentiles) / len(percentiles)), 1) if percentiles else None
-
-    # Only render platforms we actually have dates for
     platforms = [p for p in platforms if p.get("join_iso")]
-
     return render_template("results.html", platforms=platforms, score=score)
 
 def add_platform_card(platforms, percentiles, key, ts):
