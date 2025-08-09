@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 {% block body %}
-  <!-- Time adapter enables Chart.js 'time' scale -->
+  <!-- Time adapter so Chart.js understands ISO dates on the x-axis -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 
   <div class="card">
@@ -9,7 +9,7 @@
 
     {% if score is not none %}
       <p style="font-size:22px; font-weight:700;">Composite Percentile: {{ score }} / 100</p>
-      <p class="note">Smaller is earlier. This averages your percentile across the platforms you connected.</p>
+      <p class="note">Smaller is earlier. This averages your percentile across connected platforms.</p>
     {% else %}
       <p class="note">Add at least one platform to compute your percentile.</p>
     {% endif %}
@@ -17,13 +17,19 @@
     <div class="row">
       <div class="col">
         <h3>Platforms</h3>
+
         {% for p in platforms %}
           <div class="platform">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <div><strong>{{ p.name }}</strong></div>
-              {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
+              {% if p.percentile is not none %}
+                <span class="pill">{{ p.percentile }}th percentile</span>
+              {% endif %}
             </div>
-            <div class="note">Joined: {{ p.joined }} {% if p.username %}( {{ p.username }} ){% endif %}</div>
+
+            <div class="note">
+              Joined: {{ p.joined }}{% if p.username %} ({{ p.username }}){% endif %}
+            </div>
 
             {% if p.joined_users and p.today_users %}
               <p style="margin:6px 0 0 0;">
@@ -34,76 +40,95 @@
             {% endif %}
 
             {% if p.chart and p.chart['points_m'] %}
- <div style="margin-top:10px;">
-  <canvas id="curve-{{ loop.index }}"></canvas>
-</div>
-<script>
-  (function(){
-    const points = {{ p.chart['points_m']|tojson }};  // [{x:'YYYY-MM-DD', y:<millions>}]
-    const joinISO = "{{ p.join_iso or '' }}";
-    const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
+              <div style="margin-top:10px;">
+                <canvas id="curve-{{ loop.index }}"></canvas>
+              </div>
+              <script>
+                (function(){
+                  // [{x:'YYYY-MM-DD', y:<millions>}]
+                  const points = {{ p.chart['points_m']|tojson }};
+                  // Exact ISO join date like "2004-11-01"
+                  const joinISO = "{{ p.join_iso or '' }}";
+                  const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-    // Inline plugin: dashed vertical line + small arrow at the exact joined date
-    const joinMarkerPlugin = {
-      id: 'joinMarker{{ loop.index }}',
-      afterDraw(chart) {
-        if (!joinISO) return;
-        const xScale = chart.scales.x;
-        const x = xScale.getPixelForValue(new Date(joinISO));
-        if (!isFinite(x)) return;
+                  // Inline plugin: dashed vertical line + small arrow at exact join date
+                  const joinMarkerPlugin = {
+                    id: 'joinMarker{{ loop.index }}',
+                    afterDraw(chart) {
+                      if (!joinISO) return;
+                      const xScale = chart.scales.x;
+                      // Let the time adapter parse the ISO string
+                      const x = xScale.getPixelForValue(new Date(joinISO));
+                      if (!isFinite(x)) return;
 
-        const { top, bottom } = chart.chartArea;
-        const c = chart.ctx;
-        c.save();
-        c.setLineDash([6,4]);
-        c.lineWidth = 1.5;
-        c.beginPath();
-        c.moveTo(x, top);
-        c.lineTo(x, bottom);
-        c.stroke();
-        // Arrow head at the top
-        c.setLineDash([]);
-        c.beginPath();
-        c.moveTo(x, top);           // tip
-        c.lineTo(x - 6, top + 12);  // left
-        c.lineTo(x + 6, top + 12);  // right
-        c.closePath();
-        c.fill();
-        c.restore();
-      }
-    };
+                      const { top, bottom } = chart.chartArea;
+                      const c = chart.ctx;
+                      c.save();
+                      c.setLineDash([6,4]);
+                      c.lineWidth = 1.5;
+                      c.beginPath();
+                      c.moveTo(x, top);
+                      c.lineTo(x, bottom);
+                      c.stroke();
+                      // Arrow head at the top
+                      c.setLineDash([]);
+                      c.beginPath();
+                      c.moveTo(x, top);           // tip
+                      c.lineTo(x - 6, top + 12);  // left
+                      c.lineTo(x + 6, top + 12);  // right
+                      c.closePath();
+                      c.fill();
+                      c.restore();
+                    }
+                  };
 
-    new Chart(ctx, {
-      type: 'line',
-      data: {
-        datasets: [{
-          label: 'Cumulative users (Millions)',
-          data: points,        // let Chart.js parse ISO dates via the time adapter
-          fill: false,
-          tension: 0.1,
-          spanGaps: true
-        }]
-      },
-      options: {
-        plugins: { legend: { display: false } },
-        scales: {
-          x: {
-            type: 'time',
-            time: { unit: 'year', tooltipFormat: 'MMM d, yyyy' },
-            ticks: { maxRotation: 0, autoSkip: true },
-            title: { display: true, text: 'Year' }
-          },
-          y: {
-            beginAtZero: true,
-            title: { display: true, text: 'Users (Millions)' }
-          }
-        }
-      },
-      plugins: [joinMarkerPlugin]
-    });
-  })();
-</script>
+                  new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                      datasets: [{
+                        label: 'Cumulative users (Millions)',
+                        data: points,      // ISO dates parsed by time adapter
+                        fill: false,
+                        tension: 0.1,
+                        spanGaps: true
+                      }]
+                    },
+                    options: {
+                      plugins: { legend: { display: false } },
+                      scales: {
+                        x: {
+                          type: 'time',
+                          time: { unit: 'year', tooltipFormat: 'MMM d, yyyy' },
+                          ticks: { maxRotation: 0, autoSkip: true },
+                          title: { display: true, text: 'Year' }
+                        },
+                        y: {
+                          beginAtZero: true,
+                          title: { display: true, text: 'Users (Millions)' }
+                        }
+                      }
+                    },
+                    plugins: [joinMarkerPlugin]
+                  });
+                })();
+              </script>
+            {% endif %}
 
+            {% if p.note %}
+              <div class="note">Note: {{ p.note }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="col">
+        <h3>Your place on the curve</h3>
+        <canvas id="curveChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
     // Bar chart for early-adopter percentiles (smaller = earlier)
     const labels = {{ platforms|map(attribute='name')|list|tojson }};
     const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
