@@ -6,10 +6,11 @@
     {% if not platforms or not platforms|selectattr("name","equalto","Gmail")|selectattr("percentile")|list %}
       <p class="note">Missing Gmail date? <a href="{{ url_for('login_google') }}">Grant Gmail access</a>.</p>
     {% endif %}
-    {% if score %}
-      <p style="font-size:22px; font-weight:700;">Composite Score: {{ score }}/100</p>
+    {% if score is not none %}
+      <p style="font-size:22px; font-weight:700;">Composite Percentile (users-based): {{ score }}/100</p>
+      <p class="note">This is the percent of current users who arrived after you, averaged across connected platforms.</p>
     {% else %}
-      <p class="note">Add at least one platform to compute a composite score.</p>
+      <p class="note">Add at least one platform to compute your users-based percentile.</p>
     {% endif %}
 
     <div class="row">
@@ -21,7 +22,7 @@
               <div><strong>{{ p.name }}</strong></div>
               {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
             </div>
-            <div class="note">Joined: {{ p.joined }} {% if p.username %} ({{ p.username }}){% endif %}</div>
+            <div class="note">Joined: {{ p.joined }} {% if p.username %}( {{ p.username }} ){% endif %}</div>
 
             {% if p.joined_users and p.today_users %}
               <p style="margin:6px 0 0 0;">
@@ -38,26 +39,26 @@
               </div>
               <script>
                 (function(){
-                  const labels = {{ p.chart['labels']|tojson }};
-                  const values = {{ p.chart['values']|tojson }};
+                  const labels = {{ p.chart['labels']|tojson }};      // ["2004","2005",...]
+                  const valuesM = {{ p.chart['values_m']|tojson }};    // users in millions
                   const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
                   const datasets = [{
                     type: 'line',
-                    label: 'Cumulative users',
-                    data: values,
+                    label: 'Cumulative users (Millions)',
+                    data: valuesM,
                     fill: false,
                     tension: 0.1
                   }];
 
                   {% if p.join_label %}
-                    const joinLabel = "{{ p.join_label }}";
+                    const joinLabel = "{{ p.join_label }}";            // e.g. "2010"
                     const idx = labels.indexOf(joinLabel);
                     if (idx >= 0) {
-                      const top = Math.max.apply(null, values) * 1.05;
+                      const top = Math.max.apply(null, valuesM) * 1.05;
                       const base = 0;
-                      const vDataTop = new Array(values.length).fill(null); vDataTop[idx] = top;
-                      const vDataBase = new Array(values.length).fill(null); vDataBase[idx] = base;
+                      const vDataTop = new Array(valuesM.length).fill(null); vDataTop[idx] = top;
+                      const vDataBase = new Array(valuesM.length).fill(null); vDataBase[idx] = base;
                       datasets.push({ type: 'line', data: vDataTop, borderDash: [6,4], pointRadius: 0 });
                       datasets.push({ type: 'line', data: vDataBase, borderDash: [6,4], pointRadius: 0 });
                     }
@@ -69,8 +70,14 @@
                     options: {
                       plugins: { legend: { display: false } },
                       scales: {
-                        x: { ticks: { maxRotation: 0, autoSkip: true } },
-                        y: { beginAtZero: true }
+                        x: {
+                          ticks: { maxRotation: 0, autoSkip: true },
+                          title: { display: true, text: 'Year' }
+                        },
+                        y: {
+                          beginAtZero: true,
+                          title: { display: true, text: 'Users (Millions)' }
+                        }
                       }
                     }
                   });
@@ -91,7 +98,7 @@
   </div>
 
   <script>
-    // Existing bar chart for percentiles
+    // Bar chart for users-based percentiles
     const labels = {{ platforms|map(attribute='name')|list|tojson }};
     const data = {{ platforms|map(attribute='percentile')|list|tojson }}.map(v => v === null ? 0 : v);
     const ctx = document.getElementById('curveChart').getContext('2d');
@@ -100,14 +107,16 @@
       data: {
         labels: labels,
         datasets: [{
-          label: 'Percentile (0–100)',
+          label: 'Users-based Percentile (0–100)',
           data: data
         }]
       },
       options: {
         scales: {
-          y: { beginAtZero: true, max: 100 }
-        }
+          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
+          x: { title: { display: true, text: 'Platform' } }
+        },
+        plugins: { legend: { display: false } }
       }
     });
   </script>
