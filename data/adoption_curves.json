@@ -345,7 +345,6 @@
   },
   "reddit": {
     "launch_date": "2005-06-23",
-    "metric": "DAU",
     "timeline": [
       [
         "2005-06-23",
@@ -383,7 +382,6 @@
   },
   "amazonprime": {
     "launch_date": "2005-02-02",
-    "metric": "paid_subscribers",
     "timeline": [
       [
         "2005-02-02",

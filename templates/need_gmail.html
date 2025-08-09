@@ -1,0 +1,9 @@
+{% extends "layout.html" %}
+{% block body %}
+  <div class="card">
+    <h2>Additional permission required</h2>
+    <p class="note">To verify join dates from Gmail, please grant the <strong>"See your Gmail messages"</strong> permission on the Google screen.</p>
+    <a class="btn" href="{{ url_for('login_google') }}">Try Google sign-in again</a>
+    <a class="btn secondary" href="{{ url_for('index') }}" style="margin-left:8px;">Go back</a>
+  </div>
+{% endblock %}
