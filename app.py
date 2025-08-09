@@ -29,7 +29,7 @@ oauth.register(
     client_kwargs={"scope": "openid email https://www.googleapis.com/auth/gmail.readonly"},
 )
 
-# ---- safer loader so a JSON typo won't crash the app
+# ---- safe curve loader
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
 def load_curves(path):
     try:
@@ -65,6 +65,18 @@ PRETTY_NAMES = {
     "reddit": "Reddit",
     "amazonprime": "Amazon Prime",
 }
+# Simple logo URLs (SVG/PNG). Use your own /static files later if you prefer.
+LOGO_URLS = {
+    "gmail": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png",
+    "twitter": "https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg",
+    "instagram": "https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png",
+    "linkedin": "https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg",
+    "dropbox": "https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg",
+    "openai": "https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg",
+    "spotify": "https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",
+    "reddit": "https://upload.wikimedia.org/wikipedia/en/5/58/Reddit_logo_new.svg",
+    "amazonprime": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Prime_logo.png"
+}
 
 # ---------- Utilities ----------
 def token_has_gmail_scope(token: dict) -> bool:
@@ -87,25 +99,39 @@ def ms_to_iso_date(ms):
 
 def month_year_to_ms(month_str: str, year_str: str):
     try:
-        m = int(month_str)
-        y = int(year_str)
+        m = int(month_str); y = int(year_str)
         dt = datetime(y, m, 1, tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
     except Exception:
         return None
 
 def abs_month_diff(a_dt: date, b_dt: date) -> int:
-    """Absolute difference in whole months between two dates."""
     am = a_dt.year * 12 + a_dt.month
     bm = b_dt.year * 12 + b_dt.month
     return abs(am - bm)
+
+def month_diff(a_dt: date, b_dt: date) -> int:
+    """Whole months from a_dt to b_dt (signed)."""
+    return (b_dt.year - a_dt.year) * 12 + (b_dt.month - a_dt.month)
+
+def months_to_human(m: int) -> str:
+    """Convert months -> 'X years Y months' (omit zero parts)."""
+    years = m // 12
+    months = m % 12
+    parts = []
+    if years:
+        parts.append(f"{years} year" + ("s" if years != 1 else ""))
+    if months:
+        parts.append(f"{months} month" + ("s" if months != 1 else ""))
+    if not parts:
+        return "0 months"
+    return " ".join(parts)
 
 # ---------- Gmail helpers ----------
 def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 def gmail_oldest_for_query(credentials: Credentials, query: str):
-    """Find the oldest message matching a Gmail search query (walk to last page). Used for targeted 'welcome' queries."""
     svc = gmail_service(credentials)
     page_token = None
     last_id = None
@@ -122,7 +148,7 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Fast binary-search baseline (avoids paging whole mailbox)
+# Fast baseline (binary search) — avoids timeouts
 def gmail_has_messages_before(service, dt):
     q = f"before:{dt.strftime('%Y/%m/%d')}"
     resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
@@ -160,7 +186,7 @@ def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
     msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Gmail welcome queries (NO Facebook due to .edu early signups)
+# Gmail welcome queries (NO Facebook)
 WELCOME_QUERIES = {
     "instagram":   'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
     "linkedin":    'from:(linkedin.com) (subject:(Welcome) OR subject:(Confirm))',
@@ -179,6 +205,14 @@ def parse_timeline(platform):
     tl = sorted([(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d, u in tl],
                 key=lambda x: x[0])
     return tl
+
+def launch_date(platform):
+    meta = CURVES.get(platform, {})
+    ld = meta.get("launch_date")
+    if not ld:
+        tl = parse_timeline(platform)
+        return tl[0][0] if tl else None
+    return datetime.strptime(ld, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
 def users_at(platform, when_ms):
     tl = parse_timeline(platform)
@@ -251,168 +285,4 @@ def logout():
     session.clear()
     return redirect(url_for("index"))
 
-def get_google_credentials():
-    token = session.get("google_token")
-    if not token or not token_has_gmail_scope(token):
-        return None
-    return Credentials(
-        token=token["access_token"],
-        refresh_token=token.get("refresh_token"),
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
-    )
-
-@app.route("/results", methods=["GET", "POST"])
-def results():
-    platform_keys = ["twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
-
-    # 1) Collect manual Month/Year entries
-    manual = {}  # key -> ms
-    if request.method == "POST":
-        for key in platform_keys:
-            m = request.form.get(f"{key}_join_month")
-            y = request.form.get(f"{key}_join_year")
-            if m and y:
-                ms = month_year_to_ms(m, y)
-                if ms:
-                    manual[key] = ms
-    else:
-        for key in platform_keys:
-            m = request.args.get(f"{key}_join_month")
-            y = request.args.get(f"{key}_join_year")
-            if m and y:
-                ms = month_year_to_ms(m, y)
-                if ms:
-                    manual[key] = ms
-
-    # 2) Gmail detections (verified)
-    gmail_hits = {}
-    creds = get_google_credentials()
-    if creds:
-        for key in ["instagram","linkedin","dropbox","openai","spotify","twitter","reddit","amazonprime"]:
-            q = WELCOME_QUERIES.get(key)
-            if not q:
-                continue
-            try:
-                ts = gmail_oldest_for_query(creds, q)
-            except Exception:
-                ts = None
-            if ts:
-                gmail_hits[key] = ts
-
-    # Baseline Gmail (optional card) using fast binary search to avoid timeouts
-    gmail_baseline_ts = None
-    if creds:
-        try:
-            gmail_baseline_ts = gmail_oldest_message_epoch_ms_binary_search(creds)
-        except Exception as e:
-            print("gmail baseline failed:", e)
-
-    # 3) Resolve conflicts with 12-month rule
-    resolved = {}  # key -> dict(date_ms, verified_bool, email_hint_ms or None)
-    for key in set(list(manual.keys()) + list(gmail_hits.keys())):
-        m_ms = manual.get(key)
-        g_ms = gmail_hits.get(key)
-
-        if m_ms and g_ms:
-            m_d = datetime.fromtimestamp(m_ms/1000, tz=timezone.utc).date()
-            g_d = datetime.fromtimestamp(g_ms/1000, tz=timezone.utc).date()
-            if abs_month_diff(m_d, g_d) < 12:
-                resolved[key] = {"date_ms": g_ms, "verified": True, "email_hint_ms": None}
-            else:
-                # prefer self-report, but show a small note about the email-found date
-                resolved[key] = {"date_ms": m_ms, "verified": False, "email_hint_ms": g_ms}
-        elif g_ms:
-            resolved[key] = {"date_ms": g_ms, "verified": True, "email_hint_ms": None}
-        elif m_ms:
-            resolved[key] = {"date_ms": m_ms, "verified": False, "email_hint_ms": None}
-
-    # 4) Build platform cards + compute percentiles
-    platforms = []
-    percentiles_all = []
-    percentiles_verified = []
-
-    # Gmail baseline card
-    if gmail_baseline_ts:
-        add_platform_card(platforms, percentiles_all, percentiles_verified, "gmail", gmail_baseline_ts, verified=True)
-
-    for key, info in resolved.items():
-        if key not in CURVES:
-            continue
-        add_platform_card(
-            platforms, percentiles_all, percentiles_verified,
-            key, info["date_ms"], verified=info["verified"],
-            email_hint_ms=info["email_hint_ms"]
-        )
-
-    # Composite percentiles
-    score_all = round(100 * (sum([p/100.0 for p in percentiles_all]) / len(percentiles_all)), 1) if percentiles_all else None
-    score_verified = round(100 * (sum([p/100.0 for p in percentiles_verified]) / len(percentiles_verified)), 1) if percentiles_verified else None
-
-    # Only render platforms we actually have dates for
-    platforms = [p for p in platforms if p.get("join_iso")]
-
-    # Data for bar chart + badges
-    labels = [p["name"] for p in platforms]
-    values = [p["percentile"] for p in platforms]
-    verified_flags = [bool(p.get("verified")) for p in platforms]
-
-    return render_template(
-        "results.html",
-        platforms=platforms,
-        score=score_all,
-        score_verified=score_verified,
-        chart_labels=labels,
-        chart_values=values,
-        chart_verified=verified_flags
-    )
-
-def add_platform_card(platforms, percentiles_all, percentiles_verified, key, ts, verified=False, email_hint_ms=None):
-    joined_u = users_at(key, ts)
-    today_u = users_today(key)
-    if not (joined_u and today_u):
-        return
-    metric_tag = METRIC_TAGS.get(key, "Users")
-    series = timeline_series_time(key)
-    badge = early_adopter_percentile(joined_u, today_u)
-    if badge is not None:
-        percentiles_all.append(badge)
-        if verified:
-            percentiles_verified.append(badge)
-    card = {
-        "name": PRETTY_NAMES.get(key, key.title()),
-        "joined": ms_to_pretty_date(ts),
-        "percentile": badge,
-        "joined_users": joined_u,
-        "today_users": today_u,
-        "narrative_percent": joined_before_percent(joined_u, today_u),
-        "chart": series,
-        "join_iso": ms_to_iso_date(ts),
-        "metric_tag": metric_tag,
-        "y_label": f"{metric_tag} (Millions)",
-        "verified": bool(verified),
-    }
-    if email_hint_ms:
-        card["email_hint"] = f"Also found in email: {ms_to_pretty_date(email_hint_ms)}"
-    platforms.append(card)
-
-@app.route("/healthz")
-def healthz():
-    return jsonify({"ok": True})
-
-@app.route("/diag")
-def diag():
-    token = session.get("google_token")
-    safe = {
-        "GOOGLE_CLIENT_ID_set": bool(os.getenv("GOOGLE_CLIENT_ID")),
-        "GOOGLE_CLIENT_SECRET_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
-        "has_token": bool(token),
-        "token_has_gmail_scope": token_has_gmail_scope(token) if token else False,
-    }
-    return jsonify(safe)
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+def get_google
