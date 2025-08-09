@@ -33,6 +33,32 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.jso
 with open(DATA_PATH, "r") as f:
     CURVES = json.load(f)
 
+# ---------------- Metric tags per platform ----------------
+# What the Y-axis and badges should say for each platform.
+METRIC_TAGS = {
+    "gmail": "Users",
+    "twitter": "MAU",
+    "instagram": "MAU",
+    "linkedin": "Members",
+    "dropbox": "Registered users",
+    "openai": "WAU",
+    "spotify": "MAU",
+    "reddit": "DAU",
+    "amazonprime": "Paid subscribers",
+}
+
+PRETTY_NAMES = {
+    "gmail": "Gmail",
+    "twitter": "Twitter/X",
+    "instagram": "Instagram",
+    "linkedin": "LinkedIn",
+    "dropbox": "Dropbox",
+    "openai": "OpenAI/ChatGPT",
+    "spotify": "Spotify",
+    "reddit": "Reddit",
+    "amazonprime": "Amazon Prime",
+}
+
 # -------- Utilities --------
 def token_has_gmail_scope(token: dict) -> bool:
     if not token:
@@ -53,7 +79,6 @@ def ms_to_iso_date(ms):
     return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 def date_input_to_ms(s: str):
-    # expects "YYYY-MM-DD"
     try:
         dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         return int(dt.timestamp() * 1000)
@@ -82,8 +107,9 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Gmail welcome queries (NO Facebook)
+# Gmail welcome queries
 WELCOME_QUERIES = {
+    # note: Facebook intentionally omitted due to .edu early signups
     "instagram": 'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
     "linkedin":  'from:(linkedin.com) (subject:(Welcome) OR subject:(Confirm))',
     "dropbox":   'from:(no-reply@dropbox.com) (subject:(Welcome) OR subject:(Confirm))',
@@ -121,7 +147,7 @@ def users_today(platform):
     return tl[-1][1] if tl else None
 
 def timeline_series_time(platform):
-    """Return [{x:'YYYY-MM-DD', y:<millions>}] along the platform timeline, extending flat to today if needed."""
+    """Return [{x:'YYYY-MM-DD', y:<millions>}] along the platform timeline, extend flat to today if needed."""
     tl = parse_timeline(platform)
     if not tl:
         return {"points_m": []}
@@ -191,9 +217,7 @@ def results():
     manual_dates = {}  # key -> ms
     platform_keys = ["twitter", "instagram", "linkedin", "dropbox", "openai", "spotify", "reddit", "amazonprime"]
 
-    # optional username for Twitter card label
     twitter_username = None
-
     if request.method == "POST":
         twitter_username = (request.form.get("twitter_username") or "").strip() or None
         for key in platform_keys:
@@ -203,7 +227,6 @@ def results():
                 if ms:
                     manual_dates[key] = ms
     else:
-        # allow querystring ?twitter_join_date=YYYY-MM-DD, etc.
         twitter_username = (request.args.get("twitter_username") or "").strip() or None
         for key in platform_keys:
             s = request.args.get(f"{key}_join_date")
@@ -215,7 +238,7 @@ def results():
     platforms = []
     percentiles = []
 
-    # A) Gmail-based detection (if available)
+    # Gmail-based detection (auto) — prefer manual date if provided
     creds = get_google_credentials()
     if creds:
         for key in ["instagram", "linkedin", "dropbox", "openai", "spotify", "twitter", "reddit", "amazonprime"]:
@@ -224,90 +247,59 @@ def results():
                 continue
             try:
                 ts = gmail_oldest_for_query(creds, q)
-            except Exception as e:
+            except Exception:
                 ts = None
-            if ts:
-                # If user also provided a manual date, prefer manual (assume more accurate)
-                if key not in manual_dates:
-                    manual_dates[key] = ts
+            if ts and key not in manual_dates:
+                manual_dates[key] = ts
 
-    # B) Build cards for any platform we now have a date for
-    pretty_names = {
-        "gmail": "Gmail",
-        "twitter": "Twitter/X",
-        "instagram": "Instagram",
-        "linkedin": "LinkedIn",
-        "dropbox": "Dropbox",
-        "openai": "OpenAI/ChatGPT",
-        "spotify": "Spotify",
-        "reddit": "Reddit",
-        "amazonprime": "Amazon Prime"
-    }
-
-    # Gmail baseline (mailbox oldest) — keep as its own card if desired (optional)
-    # If you don't want Gmail itself as a platform card, comment this block out.
-    # (We keep it because many users like seeing their email start date.)
+    # Optionally include Gmail itself as a "platform"
     if creds:
         try:
-            # Oldest message in mailbox as proxy for "started using email"
-            # You can re-enable the binary-search logic if you had it before; here we reuse a broad fallback.
-            # For stability, we’ll query the whole mailbox last page:
-            ts = gmail_oldest_for_query(creds, "")  # empty query -> whole mailbox
+            ts = gmail_oldest_for_query(creds, "")  # oldest in mailbox
             if ts:
-                joined_u = users_at("gmail", ts)
-                today_u = users_today("gmail")
-                if joined_u and today_u:
-                    badge = early_adopter_percentile(joined_u, today_u)
-                    if badge is not None:
-                        percentiles.append(badge / 100.0)
-                    platforms.append({
-                        "name": pretty_names["gmail"],
-                        "joined": ms_to_pretty_date(ts),
-                        "percentile": badge,
-                        "joined_users": joined_u,
-                        "today_users": today_u,
-                        "narrative_percent": joined_before_percent(joined_u, today_u),
-                        "chart": timeline_series_time("gmail"),
-                        "join_iso": ms_to_iso_date(ts)
-                    })
+                add_platform_card(platforms, percentiles, "gmail", ts)
         except Exception:
             pass
 
-    # Now add all other platforms for which we have a date
+    # Add all other platforms we have dates for
     for key, ts in manual_dates.items():
         if key not in CURVES:
-            continue  # no curve data to plot against
-        joined_u = users_at(key, ts)
-        today_u = users_today(key)
-        series = timeline_series_time(key)
-        if joined_u and today_u:
-            badge = early_adopter_percentile(joined_u, today_u)
-            if badge is not None:
-                percentiles.append(badge / 100.0)
-            name = pretty_names.get(key, key.title())
-            title = name
-            extra = {}
-            if key == "twitter" and twitter_username:
-                extra["username"] = twitter_username
-            platforms.append({
-                "name": title,
-                "joined": ms_to_pretty_date(ts),
-                "percentile": badge,
-                "joined_users": joined_u,
-                "today_users": today_u,
-                "narrative_percent": joined_before_percent(joined_u, today_u),
-                "chart": series,
-                "join_iso": ms_to_iso_date(ts),
-                **extra
-            })
+            continue
+        add_platform_card(platforms, percentiles, key, ts, twitter_username=twitter_username)
 
-    # Composite (small = earlier). Only if at least one platform produced a percentile.
+    # Composite (small = earlier).
     score = round(100 * (sum(percentiles) / len(percentiles)), 1) if percentiles else None
 
-    # Only render platforms that we actually have dates for
+    # Only render platforms we actually have dates for
     platforms = [p for p in platforms if p.get("join_iso")]
 
     return render_template("results.html", platforms=platforms, score=score, twitter_username=twitter_username)
+
+def add_platform_card(platforms, percentiles, key, ts, twitter_username=None):
+    joined_u = users_at(key, ts)
+    today_u = users_today(key)
+    if not (joined_u and today_u):
+        return
+    metric_tag = METRIC_TAGS.get(key, "Users")
+    series = timeline_series_time(key)
+    badge = early_adopter_percentile(joined_u, today_u)
+    if badge is not None:
+        percentiles.append(badge / 100.0)
+    card = {
+        "name": PRETTY_NAMES.get(key, key.title()),
+        "joined": ms_to_pretty_date(ts),
+        "percentile": badge,
+        "joined_users": joined_u,
+        "today_users": today_u,
+        "narrative_percent": joined_before_percent(joined_u, today_u),
+        "chart": series,
+        "join_iso": ms_to_iso_date(ts),
+        "metric_tag": metric_tag,
+        "y_label": f"{metric_tag} (Millions)"
+    }
+    if key == "twitter" and twitter_username:
+        card["username"] = twitter_username
+    platforms.append(card)
 
 @app.route("/healthz")
 def healthz():

@@ -9,9 +9,9 @@
 
     {% if score is not none %}
       <p style="font-size:22px; font-weight:700;">Composite Percentile: {{ score }} / 100</p>
-      <p class="note">Smaller is earlier. This averages your percentile across connected platforms.</p>
+      <p class="note">Smaller is earlier. We average your percentiles across the platforms we could date.</p>
     {% else %}
-      <p class="note">Add at least one platform to compute your percentile.</p>
+      <p class="note">Connect Google and/or enter one or more manual dates to see your results.</p>
     {% endif %}
 
     <div class="row">
@@ -20,8 +20,13 @@
 
         {% for p in platforms %}
           <div class="platform">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div><strong>{{ p.name }}</strong></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <strong>{{ p.name }}</strong>
+                {% if p.metric_tag %}
+                  <span class="pill secondary" title="Metric used for this platform">{{ p.metric_tag }}</span>
+                {% endif %}
+              </div>
               {% if p.percentile is not none %}
                 <span class="pill">{{ p.percentile }}th percentile</span>
               {% endif %}
@@ -45,22 +50,19 @@
               </div>
               <script>
                 (function(){
-                  // [{x:'YYYY-MM-DD', y:<millions>}]
-                  const points = {{ p.chart['points_m']|tojson }};
-                  // Exact ISO join date like "2004-11-01"
+                  const points = {{ p.chart['points_m']|tojson }};  // [{x:'YYYY-MM-DD', y:<millions>}]
                   const joinISO = "{{ p.join_iso or '' }}";
+                  const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
+                  const metricTag = "{{ p.metric_tag or 'Users' }}";
                   const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                  // Inline plugin: dashed vertical line + small arrow at exact join date
+                  // Dashed vertical line + small arrow at exact join date
                   const joinMarkerPlugin = {
                     id: 'joinMarker{{ loop.index }}',
                     afterDraw(chart) {
                       if (!joinISO) return;
-                      const xScale = chart.scales.x;
-                      // Let the time adapter parse the ISO string
-                      const x = xScale.getPixelForValue(new Date(joinISO));
+                      const x = chart.scales.x.getPixelForValue(new Date(joinISO));
                       if (!isFinite(x)) return;
-
                       const { top, bottom } = chart.chartArea;
                       const c = chart.ctx;
                       c.save();
@@ -73,9 +75,9 @@
                       // Arrow head at the top
                       c.setLineDash([]);
                       c.beginPath();
-                      c.moveTo(x, top);           // tip
-                      c.lineTo(x - 6, top + 12);  // left
-                      c.lineTo(x + 6, top + 12);  // right
+                      c.moveTo(x, top);
+                      c.lineTo(x - 6, top + 12);
+                      c.lineTo(x + 6, top + 12);
                       c.closePath();
                       c.fill();
                       c.restore();
@@ -86,15 +88,27 @@
                     type: 'line',
                     data: {
                       datasets: [{
-                        label: 'Cumulative users (Millions)',
-                        data: points,      // ISO dates parsed by time adapter
+                        label: metricTag + ' (Millions)',
+                        data: points,
                         fill: false,
                         tension: 0.1,
                         spanGaps: true
                       }]
                     },
                     options: {
-                      plugins: { legend: { display: false } },
+                      plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                          callbacks: {
+                            label: function(context){
+                              // e.g., "MAU: 1,234.5M"
+                              const v = context.parsed.y;
+                              const formatted = Intl.NumberFormat().format(v);
+                              return `${metricTag}: ${formatted}M`;
+                            }
+                          }
+                        }
+                      },
                       scales: {
                         x: {
                           type: 'time',
@@ -104,7 +118,7 @@
                         },
                         y: {
                           beginAtZero: true,
-                          title: { display: true, text: 'Users (Millions)' }
+                          title: { display: true, text: yLabel }
                         }
                       }
                     },
@@ -112,10 +126,6 @@
                   });
                 })();
               </script>
-            {% endif %}
-
-            {% if p.note %}
-              <div class="note">Note: {{ p.note }}</div>
             {% endif %}
           </div>
         {% endfor %}
