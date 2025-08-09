@@ -6,7 +6,6 @@ from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import requests
 
 def getenv(name, default=None):
     v = os.getenv(name, default)
@@ -20,7 +19,6 @@ app.secret_key = getenv("SECRET_KEY", "dev-secret-change-me")
 
 GOOGLE_CLIENT_ID = getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = getenv("GOOGLE_CLIENT_SECRET", "")
-X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")  # optional
 
 oauth = OAuth(app)
 oauth.register(
@@ -35,7 +33,7 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.jso
 with open(DATA_PATH, "r") as f:
     CURVES = json.load(f)
 
-# ---------------- Gmail + OAuth helpers ----------------
+# -------- Utilities --------
 def token_has_gmail_scope(token: dict) -> bool:
     if not token:
         return False
@@ -44,13 +42,8 @@ def token_has_gmail_scope(token: dict) -> bool:
         scopes = scopes.split()
     return bool(scopes and "https://www.googleapis.com/auth/gmail.readonly" in scopes)
 
-def iso_to_epoch_ms(s):
-    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    return int(dt.timestamp() * 1000)
-
 def ms_to_pretty_date(ms):
     dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
-    # handle platforms that don’t support %-d (Windows)
     try:
         return dt.strftime("%B %-d, %Y")
     except Exception:
@@ -59,70 +52,25 @@ def ms_to_pretty_date(ms):
 def ms_to_iso_date(ms):
     return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
+def date_input_to_ms(s: str):
+    # expects "YYYY-MM-DD"
+    try:
+        dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return None
+
+# -------- Gmail helpers --------
 def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
-def gmail_has_messages_before(service, dt):
-    q = f"before:{dt.strftime('%Y/%m/%d')}"
-    resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
-    return bool(resp.get("messages"))
-
-def gmail_find_earliest_date(service):
-    lo = datetime(2004, 1, 1, tzinfo=timezone.utc)
-    hi = datetime.now(timezone.utc) + timedelta(days=1)
-    for _ in range(32):
-        mid = lo + (hi - lo) / 2
-        if gmail_has_messages_before(service, mid):
-            hi = mid
-        else:
-            lo = mid
-    approx = (hi - timedelta(days=1)).date()
-    return approx
-
-def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
-    """Mailbox baseline: oldest message date (used for Gmail 'join' proxy)."""
-    service = gmail_service(credentials)
-    earliest_day = gmail_find_earliest_date(service)
-    start = earliest_day - timedelta(days=3)
-    end = earliest_day + timedelta(days=11)
-    q = f"after:{start.strftime('%Y/%m/%d')} before:{end.strftime('%Y/%m/%d')}"
-    page_token = None
-    last_id = None
-    while True:
-        resp = service.users().messages().list(userId="me", maxResults=500, pageToken=page_token, q=q).execute()
-        ids = resp.get("messages", [])
-        if ids:
-            last_id = ids[-1]["id"]
-        page_token = resp.get("nextPageToken")
-        if not page_token:
-            break
-    if not last_id:
-        # fallback: last page of whole mailbox
-        page_token = None
-        last_id = None
-        while True:
-            resp = service.users().messages().list(userId="me", maxResults=500, pageToken=page_token, q="").execute()
-            ids = resp.get("messages", [])
-            if ids:
-                last_id = ids[-1]["id"]
-            page_token = resp.get("nextPageToken")
-            if not page_token:
-                break
-        if not last_id:
-            return None
-    msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
-    return int(msg.get("internalDate"))
-
 def gmail_oldest_for_query(credentials: Credentials, query: str):
-    """
-    Find the OLDEST message matching `query` by walking to the last page and taking the last id.
-    This is O(#pages) but fine for one-time lookups per platform.
-    """
-    service = gmail_service(credentials)
+    """Find the oldest message matching the Gmail search query."""
+    svc = gmail_service(credentials)
     page_token = None
     last_id = None
     while True:
-        resp = service.users().messages().list(userId="me", maxResults=500, pageToken=page_token, q=query).execute()
+        resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page_token, q=query).execute()
         ids = resp.get("messages", [])
         if ids:
             last_id = ids[-1]["id"]
@@ -131,20 +79,22 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
             break
     if not last_id:
         return None
-    msg = service.users().messages().get(userId="me", id=last_id, format="metadata").execute()
+    msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
+# Gmail welcome queries (NO Facebook)
 WELCOME_QUERIES = {
-    # very tolerant queries; you can tighten later
-    "facebook":  'from:(facebookmail.com) (subject:(Welcome) OR subject:(Confirm) OR subject:(Just one more step))',
     "instagram": 'from:(mail.instagram.com OR security@mail.instagram.com) (subject:(Welcome) OR subject:(Confirm))',
     "linkedin":  'from:(linkedin.com) (subject:(Welcome) OR subject:(Confirm))',
     "dropbox":   'from:(no-reply@dropbox.com) (subject:(Welcome) OR subject:(Confirm))',
     "openai":    'from:(noreply@openai.com OR team@openai.com) (subject:(Welcome) OR subject:(Confirm))',
     "spotify":   'from:(no-reply@spotify.com) (subject:(Welcome) OR subject:(Confirm) OR subject:(Welcome to Spotify))',
+    "twitter":   'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) (subject:(Welcome) OR subject:(Confirm))',
+    "reddit":    'from:(noreply@reddit.com) (subject:(welcome) OR subject:(confirm))',
+    "amazonprime": 'from:(no-reply@amazon.com OR prime@amazon.com) (subject:(Welcome to Amazon Prime) OR subject:(Your Amazon Prime) OR subject:(Confirm))'
 }
 
-# ---------------- Adoption math ----------------
+# -------- Adoption math --------
 def parse_timeline(platform):
     meta = CURVES.get(platform, {})
     tl = meta.get("timeline") or []
@@ -171,10 +121,7 @@ def users_today(platform):
     return tl[-1][1] if tl else None
 
 def timeline_series_time(platform):
-    """
-    Points as [{x:'YYYY-MM-DD', y:<millions>}] from the timeline.
-    If last point predates today, extend flat to today for a nicer chart.
-    """
+    """Return [{x:'YYYY-MM-DD', y:<millions>}] along the platform timeline, extending flat to today if needed."""
     tl = parse_timeline(platform)
     if not tl:
         return {"points_m": []}
@@ -186,7 +133,7 @@ def timeline_series_time(platform):
     return {"points_m": points}
 
 def early_adopter_percentile(joined_users, today_users):
-    # small number = earlier
+    # small number = earlier (top percentile)
     if joined_users is None or today_users in (None, 0):
         return None
     return round(100 * (joined_users / today_users), 1)
@@ -196,7 +143,7 @@ def joined_before_percent(joined_users, today_users):
         return None
     return round(100 * (1 - (joined_users / today_users)), 1)
 
-# ---------------- Routes ----------------
+# -------- Routes --------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -238,134 +185,127 @@ def get_google_credentials():
         scopes=["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
     )
 
-# ---- Twitter/X helper ----
-def twitter_created_at(username: str):
-    if not X_BEARER_TOKEN:
-        return None, None
-    url_primary = f"https://api.x.com/2/users/by/username/{username}?user.fields=created_at"
-    url_alt = f"https://api.twitter.com/2/users/by/username/{username}?user.fields=created_at"
-    headers = {"Authorization": f"Bearer {X_BEARER_TOKEN}"}
-    for u in (url_primary, url_alt):
-        try:
-            r = requests.get(u, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                created = data.get("data", {}).get("created_at")
-                if created:
-                    ms = iso_to_epoch_ms(created)
-                    return ms, created
-        except Exception:
-            pass
-    return None, None
-
 @app.route("/results", methods=["GET", "POST"])
 def results():
+    # Collect manual entries
+    manual_dates = {}  # key -> ms
+    platform_keys = ["twitter", "instagram", "linkedin", "dropbox", "openai", "spotify", "reddit", "amazonprime"]
+
+    # optional username for Twitter card label
     twitter_username = None
+
     if request.method == "POST":
-        twitter_username = request.form.get("twitter_username", "").strip() or None
+        twitter_username = (request.form.get("twitter_username") or "").strip() or None
+        for key in platform_keys:
+            field = f"{key}_join_date"
+            if field in request.form and request.form[field]:
+                ms = date_input_to_ms(request.form[field])
+                if ms:
+                    manual_dates[key] = ms
     else:
-        twitter_username = request.args.get("twitter_username", "").strip() or None
+        # allow querystring ?twitter_join_date=YYYY-MM-DD, etc.
+        twitter_username = (request.args.get("twitter_username") or "").strip() or None
+        for key in platform_keys:
+            s = request.args.get(f"{key}_join_date")
+            if s:
+                ms = date_input_to_ms(s)
+                if ms:
+                    manual_dates[key] = ms
 
     platforms = []
-    percentiles = []  # early-adopter percentiles (small = earlier), stored as 0..1
+    percentiles = []
 
-    # Gmail baseline using mailbox oldest message
+    # A) Gmail-based detection (if available)
     creds = get_google_credentials()
     if creds:
-        try:
-            gmail_ms = gmail_oldest_message_epoch_ms_binary_search(creds)
-            if gmail_ms:
-                joined_u = users_at("gmail", gmail_ms)
-                today_u = users_today("gmail")
-                series = timeline_series_time("gmail")
-                join_iso = ms_to_iso_date(gmail_ms)
-                badge = early_adopter_percentile(joined_u, today_u)
-                if badge is not None:
-                    percentiles.append(badge / 100.0)
-                platforms.append({
-                    "name": "Gmail",
-                    "joined": ms_to_pretty_date(gmail_ms),
-                    "percentile": badge,
-                    "joined_users": joined_u,
-                    "today_users": today_u,
-                    "narrative_percent": joined_before_percent(joined_u, today_u),
-                    "chart": series,
-                    "join_iso": join_iso
-                })
-        except Exception as e:
-            platforms.append({"name": "Gmail", "joined": "Error", "percentile": None, "note": str(e)})
-    else:
-        platforms.append({"name": "Gmail", "joined": "Not connected", "percentile": None, "note": "Grant Gmail Read-Only to estimate your start date."})
+        for key in ["instagram", "linkedin", "dropbox", "openai", "spotify", "twitter", "reddit", "amazonprime"]:
+            q = WELCOME_QUERIES.get(key)
+            if not q:
+                continue
+            try:
+                ts = gmail_oldest_for_query(creds, q)
+            except Exception as e:
+                ts = None
+            if ts:
+                # If user also provided a manual date, prefer manual (assume more accurate)
+                if key not in manual_dates:
+                    manual_dates[key] = ts
 
-    # Twitter/X by username (optional)
-    if twitter_username:
-        t_ms, _ = twitter_created_at(twitter_username)
-        if t_ms:
-            joined_u = users_at("twitter", t_ms)
-            today_u = users_today("twitter")
-            series = timeline_series_time("twitter")
-            join_iso = ms_to_iso_date(t_ms)
-            badge = early_adopter_percentile(joined_u, today_u)
-            if badge is not None:
-                percentiles.append(badge / 100.0)
-            platforms.append({
-                "name": "Twitter/X",
-                "joined": ms_to_pretty_date(t_ms),
-                "percentile": badge,
-                "username": twitter_username,
-                "joined_users": joined_u,
-                "today_users": today_u,
-                "narrative_percent": joined_before_percent(joined_u, today_u),
-                "chart": series,
-                "join_iso": join_iso
-            })
-        else:
-            platforms.append({"name": "Twitter/X", "joined": "Unavailable", "percentile": None, "username": twitter_username, "note": "API token missing or lookup failed."})
-
-    # -------- New: infer join dates for other platforms from Gmail welcome emails --------
-    infer_targets = ["facebook", "instagram", "linkedin", "dropbox", "openai", "spotify"]
+    # B) Build cards for any platform we now have a date for
     pretty_names = {
-        "facebook": "Facebook",
+        "gmail": "Gmail",
+        "twitter": "Twitter/X",
         "instagram": "Instagram",
         "linkedin": "LinkedIn",
         "dropbox": "Dropbox",
         "openai": "OpenAI/ChatGPT",
         "spotify": "Spotify",
+        "reddit": "Reddit",
+        "amazonprime": "Amazon Prime"
     }
-    if creds:
-        svc = gmail_service(creds)
-        for key in infer_targets:
-            q = WELCOME_QUERIES.get(key)
-            try:
-                ts = gmail_oldest_for_query(creds, q) if q else None
-                if not ts:
-                    continue  # only show if found
-                joined_u = users_at(key, ts)
-                today_u = users_today(key)
-                series = timeline_series_time(key)
-                join_iso = ms_to_iso_date(ts)
-                badge = early_adopter_percentile(joined_u, today_u)
-                if badge is not None:
-                    percentiles.append(badge / 100.0)
-                platforms.append({
-                    "name": pretty_names.get(key, key.title()),
-                    "joined": ms_to_pretty_date(ts),
-                    "percentile": badge,
-                    "joined_users": joined_u,
-                    "today_users": today_u,
-                    "narrative_percent": joined_before_percent(joined_u, today_u),
-                    "chart": series,
-                    "join_iso": join_iso
-                })
-            except Exception as e:
-                platforms.append({"name": pretty_names.get(key, key.title()),
-                                  "joined": "Error", "percentile": None, "note": f"Gmail lookup failed: {e}"})
 
-    # composite (small = earlier)
-    score = None
-    if percentiles:
-        avg = sum(percentiles) / len(percentiles)
-        score = round(100 * avg, 1)
+    # Gmail baseline (mailbox oldest) — keep as its own card if desired (optional)
+    # If you don't want Gmail itself as a platform card, comment this block out.
+    # (We keep it because many users like seeing their email start date.)
+    if creds:
+        try:
+            # Oldest message in mailbox as proxy for "started using email"
+            # You can re-enable the binary-search logic if you had it before; here we reuse a broad fallback.
+            # For stability, we’ll query the whole mailbox last page:
+            ts = gmail_oldest_for_query(creds, "")  # empty query -> whole mailbox
+            if ts:
+                joined_u = users_at("gmail", ts)
+                today_u = users_today("gmail")
+                if joined_u and today_u:
+                    badge = early_adopter_percentile(joined_u, today_u)
+                    if badge is not None:
+                        percentiles.append(badge / 100.0)
+                    platforms.append({
+                        "name": pretty_names["gmail"],
+                        "joined": ms_to_pretty_date(ts),
+                        "percentile": badge,
+                        "joined_users": joined_u,
+                        "today_users": today_u,
+                        "narrative_percent": joined_before_percent(joined_u, today_u),
+                        "chart": timeline_series_time("gmail"),
+                        "join_iso": ms_to_iso_date(ts)
+                    })
+        except Exception:
+            pass
+
+    # Now add all other platforms for which we have a date
+    for key, ts in manual_dates.items():
+        if key not in CURVES:
+            continue  # no curve data to plot against
+        joined_u = users_at(key, ts)
+        today_u = users_today(key)
+        series = timeline_series_time(key)
+        if joined_u and today_u:
+            badge = early_adopter_percentile(joined_u, today_u)
+            if badge is not None:
+                percentiles.append(badge / 100.0)
+            name = pretty_names.get(key, key.title())
+            title = name
+            extra = {}
+            if key == "twitter" and twitter_username:
+                extra["username"] = twitter_username
+            platforms.append({
+                "name": title,
+                "joined": ms_to_pretty_date(ts),
+                "percentile": badge,
+                "joined_users": joined_u,
+                "today_users": today_u,
+                "narrative_percent": joined_before_percent(joined_u, today_u),
+                "chart": series,
+                "join_iso": ms_to_iso_date(ts),
+                **extra
+            })
+
+    # Composite (small = earlier). Only if at least one platform produced a percentile.
+    score = round(100 * (sum(percentiles) / len(percentiles)), 1) if percentiles else None
+
+    # Only render platforms that we actually have dates for
+    platforms = [p for p in platforms if p.get("join_iso")]
 
     return render_template("results.html", platforms=platforms, score=score, twitter_username=twitter_username)
 
