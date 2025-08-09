@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -94,12 +94,18 @@ def month_year_to_ms(month_str: str, year_str: str):
     except Exception:
         return None
 
+def abs_month_diff(a_dt: date, b_dt: date) -> int:
+    """Absolute difference in whole months between two dates."""
+    am = a_dt.year * 12 + a_dt.month
+    bm = b_dt.year * 12 + b_dt.month
+    return abs(am - bm)
+
 # ---------- Gmail helpers ----------
 def gmail_service(credentials: Credentials):
     return build("gmail", "v1", credentials=credentials, cache_discovery=False)
 
 def gmail_oldest_for_query(credentials: Credentials, query: str):
-    """Find the oldest message matching the Gmail search query (walk to last page)."""
+    """Find the oldest message matching a Gmail search query (walk to last page). Used for targeted 'welcome' queries."""
     svc = gmail_service(credentials)
     page_token = None
     last_id = None
@@ -116,13 +122,13 @@ def gmail_oldest_for_query(credentials: Credentials, query: str):
     msg = svc.users().messages().get(userId="me", id=last_id, format="metadata").execute()
     return int(msg.get("internalDate"))
 
+# Fast binary-search baseline (avoids paging whole mailbox)
 def gmail_has_messages_before(service, dt):
     q = f"before:{dt.strftime('%Y/%m/%d')}"
     resp = service.users().messages().list(userId="me", maxResults=1, q=q).execute()
     return bool(resp.get("messages"))
 
 def gmail_find_earliest_date(service):
-    # binary search on time window
     lo = datetime(2004, 1, 1, tzinfo=timezone.utc)
     hi = datetime.now(timezone.utc) + timedelta(days=1)
     for _ in range(32):
@@ -131,20 +137,14 @@ def gmail_find_earliest_date(service):
             hi = mid
         else:
             lo = mid
-    # approximate earliest day with a small buffer
     return (hi - timedelta(days=1)).date()
 
 def gmail_oldest_message_epoch_ms_binary_search(credentials: Credentials):
-    """
-    Fastest way to approximate the oldest message time WITHOUT paging the entire mailbox.
-    We binary-search by date, then fetch within a small window around that date.
-    """
     service = gmail_service(credentials)
     earliest_day = gmail_find_earliest_date(service)
     start = earliest_day - timedelta(days=3)
     end = earliest_day + timedelta(days=11)
     q = f"after:{start.strftime('%Y/%m/%d')} before:{end.strftime('%Y/%m/%d')}"
-    # Take the last page of this tiny window instead of the whole mailbox
     page_token = None
     last_id = None
     while True:
@@ -199,12 +199,10 @@ def users_today(platform):
     return tl[-1][1] if tl else None
 
 def timeline_series_time(platform):
-    """Return [{x:'YYYY-MM-DD', y:<millions>}] along the platform timeline, extend flat to today if needed."""
     tl = parse_timeline(platform)
     if not tl:
         return {"points_m": []}
     points = [{"x": d.strftime("%Y-%m-%d"), "y": round(u/1_000_000, 3)} for d, u in tl]
-    # Extend to 'today' visually
     today = datetime.now(timezone.utc).date()
     last_date = tl[-1][0].date()
     if last_date < today:
@@ -268,10 +266,10 @@ def get_google_credentials():
 
 @app.route("/results", methods=["GET", "POST"])
 def results():
-    # Collect manual Month/Year entries
     platform_keys = ["twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
-    manual_dates = {}  # key -> epoch ms
 
+    # 1) Collect manual Month/Year entries
+    manual = {}  # key -> ms
     if request.method == "POST":
         for key in platform_keys:
             m = request.form.get(f"{key}_join_month")
@@ -279,7 +277,7 @@ def results():
             if m and y:
                 ms = month_year_to_ms(m, y)
                 if ms:
-                    manual_dates[key] = ms
+                    manual[key] = ms
     else:
         for key in platform_keys:
             m = request.args.get(f"{key}_join_month")
@@ -287,12 +285,10 @@ def results():
             if m and y:
                 ms = month_year_to_ms(m, y)
                 if ms:
-                    manual_dates[key] = ms
+                    manual[key] = ms
 
-    platforms = []
-    percentiles = []
-
-    # Gmail auto-detection via welcome emails — prefer manual if provided
+    # 2) Gmail detections (verified)
+    gmail_hits = {}
     creds = get_google_credentials()
     if creds:
         for key in ["instagram","linkedin","dropbox","openai","spotify","twitter","reddit","amazonprime"]:
@@ -303,29 +299,77 @@ def results():
                 ts = gmail_oldest_for_query(creds, q)
             except Exception:
                 ts = None
-            if ts and key not in manual_dates:
-                manual_dates[key] = ts
+            if ts:
+                gmail_hits[key] = ts
 
-        # Include Gmail baseline using FAST binary search (no full mailbox paging)
+    # Baseline Gmail (optional card) using fast binary search to avoid timeouts
+    gmail_baseline_ts = None
+    if creds:
         try:
-            ts_mailbox = gmail_oldest_message_epoch_ms_binary_search(creds)
-            if ts_mailbox:
-                add_platform_card(platforms, percentiles, "gmail", ts_mailbox)
+            gmail_baseline_ts = gmail_oldest_message_epoch_ms_binary_search(creds)
         except Exception as e:
             print("gmail baseline failed:", e)
 
-    # Add all platforms we have a date for
-    for key, ts in manual_dates.items():
+    # 3) Resolve conflicts with 12-month rule
+    resolved = {}  # key -> dict(date_ms, verified_bool, email_hint_ms or None)
+    for key in set(list(manual.keys()) + list(gmail_hits.keys())):
+        m_ms = manual.get(key)
+        g_ms = gmail_hits.get(key)
+
+        if m_ms and g_ms:
+            m_d = datetime.fromtimestamp(m_ms/1000, tz=timezone.utc).date()
+            g_d = datetime.fromtimestamp(g_ms/1000, tz=timezone.utc).date()
+            if abs_month_diff(m_d, g_d) < 12:
+                resolved[key] = {"date_ms": g_ms, "verified": True, "email_hint_ms": None}
+            else:
+                # prefer self-report, but show a small note about the email-found date
+                resolved[key] = {"date_ms": m_ms, "verified": False, "email_hint_ms": g_ms}
+        elif g_ms:
+            resolved[key] = {"date_ms": g_ms, "verified": True, "email_hint_ms": None}
+        elif m_ms:
+            resolved[key] = {"date_ms": m_ms, "verified": False, "email_hint_ms": None}
+
+    # 4) Build platform cards + compute percentiles
+    platforms = []
+    percentiles_all = []
+    percentiles_verified = []
+
+    # Gmail baseline card
+    if gmail_baseline_ts:
+        add_platform_card(platforms, percentiles_all, percentiles_verified, "gmail", gmail_baseline_ts, verified=True)
+
+    for key, info in resolved.items():
         if key not in CURVES:
             continue
-        add_platform_card(platforms, percentiles, key, ts)
+        add_platform_card(
+            platforms, percentiles_all, percentiles_verified,
+            key, info["date_ms"], verified=info["verified"],
+            email_hint_ms=info["email_hint_ms"]
+        )
 
-    # Composite (small = earlier)
-    score = round(100 * (sum(percentiles) / len(percentiles)), 1) if percentiles else None
+    # Composite percentiles
+    score_all = round(100 * (sum([p/100.0 for p in percentiles_all]) / len(percentiles_all)), 1) if percentiles_all else None
+    score_verified = round(100 * (sum([p/100.0 for p in percentiles_verified]) / len(percentiles_verified)), 1) if percentiles_verified else None
+
+    # Only render platforms we actually have dates for
     platforms = [p for p in platforms if p.get("join_iso")]
-    return render_template("results.html", platforms=platforms, score=score)
 
-def add_platform_card(platforms, percentiles, key, ts):
+    # Data for bar chart + badges
+    labels = [p["name"] for p in platforms]
+    values = [p["percentile"] for p in platforms]
+    verified_flags = [bool(p.get("verified")) for p in platforms]
+
+    return render_template(
+        "results.html",
+        platforms=platforms,
+        score=score_all,
+        score_verified=score_verified,
+        chart_labels=labels,
+        chart_values=values,
+        chart_verified=verified_flags
+    )
+
+def add_platform_card(platforms, percentiles_all, percentiles_verified, key, ts, verified=False, email_hint_ms=None):
     joined_u = users_at(key, ts)
     today_u = users_today(key)
     if not (joined_u and today_u):
@@ -334,7 +378,9 @@ def add_platform_card(platforms, percentiles, key, ts):
     series = timeline_series_time(key)
     badge = early_adopter_percentile(joined_u, today_u)
     if badge is not None:
-        percentiles.append(badge / 100.0)
+        percentiles_all.append(badge)
+        if verified:
+            percentiles_verified.append(badge)
     card = {
         "name": PRETTY_NAMES.get(key, key.title()),
         "joined": ms_to_pretty_date(ts),
@@ -345,8 +391,11 @@ def add_platform_card(platforms, percentiles, key, ts):
         "chart": series,
         "join_iso": ms_to_iso_date(ts),
         "metric_tag": metric_tag,
-        "y_label": f"{metric_tag} (Millions)"
+        "y_label": f"{metric_tag} (Millions)",
+        "verified": bool(verified),
     }
+    if email_hint_ms:
+        card["email_hint"] = f"Also found in email: {ms_to_pretty_date(email_hint_ms)}"
     platforms.append(card)
 
 @app.route("/healthz")
