@@ -4,12 +4,12 @@
     <h1>FirstMover — Early Adopter Score</h1>
     <p class="note">Use either (or both) options below. We’ll only show a platform once we have a join date.</p>
 
-    <div class="row" style="align-items:flex-start; margin-top:10px;">
+    <div class="row" style="align-items:flex-start; margin-top:14px;">
       <div class="col">
         <h3>Option A — Sign in with Google</h3>
         <p class="note">
           Grants <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails that approximate join dates.
-          On the Google screen, be sure to check <strong>“See your Gmail messages”</strong>.
+          On the Google screen, check <strong>“See your Gmail messages”</strong>.
         </p>
         <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
       </div>
@@ -19,32 +19,47 @@
         <p class="note">Enter the month and year you joined any of these platforms. Fill in as many as you like.</p>
 
         <form method="POST" action="{{ url_for('results') }}">
-          <div class="row" style="gap:12px; align-items:flex-end; margin-top:6px;">
+          <div class="row" style="gap:12px; align-items:flex-end; margin-top:8px;">
             {% set platforms = [
-              ('facebook','Facebook'),('twitter','Twitter / X'),('instagram','Instagram'),
-              ('linkedin','LinkedIn'),('dropbox','Dropbox'),('openai','OpenAI / ChatGPT'),
-              ('spotify','Spotify'),('reddit','Reddit'),('amazonprime','Amazon Prime')
+              ('facebook','Facebook'),
+              ('twitter','Twitter / X'),
+              ('instagram','Instagram'),
+              ('linkedin','LinkedIn'),
+              ('dropbox','Dropbox'),
+              ('openai','OpenAI / ChatGPT'),
+              ('spotify','Spotify'),
+              ('reddit','Reddit'),
+              ('amazonprime','Amazon Prime')
             ] %}
+
             {% for key, label in platforms %}
             <div class="col" style="min-width:220px;">
               <label><strong>{{ label }}</strong></label>
               <div style="display:flex; gap:6px; margin-top:6px;">
                 <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
                   <option value="">Month</option>
-                  {% for month in months %}<option value="{{ loop.index }}">{{ month }}</option>{% endfor %}
+                  {% for month in months %}
+                    <option value="{{ loop.index }}">{{ month }}</option>
+                  {% endfor %}
                 </select>
                 <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
                   <option value="">Year</option>
-                  {% for year in years %}<option value="{{ year }}">{{ year }}</option>{% endfor %}
+                  {% for year in years %}
+                    <option value="{{ year }}">{{ year }}</option>
+                  {% endfor %}
                 </select>
               </div>
             </div>
             {% endfor %}
           </div>
-          <div style="margin-top:12px;"><button class="btn" type="submit">Show my results</button></div>
+
+          <div style="margin-top:14px;">
+            <button class="btn" type="submit">Show my results</button>
+          </div>
         </form>
       </div>
     </div>
-    <p class="note" style="margin-top:14px;">We’ll plot each platform where we can determine a join date (from Google or your entries).</p>
+
+    <p class="note" style="margin-top:16px;">We’ll plot each platform where we can determine a join date (from Google or your entries).</p>
   </div>
 {% endblock %}
