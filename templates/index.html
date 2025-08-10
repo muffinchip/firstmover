@@ -2,65 +2,88 @@
 {% block body %}
   <div class="card">
     <h1>FirstMover — Early Adopter Score</h1>
-    <p class="note">
-      Use either (or both) options below. We’ll only show a platform once we have a join date for you.
-    </p>
-
-    <div class="row">
-      <div class="col">
-        <h3>Option A: Sign in with Google</h3>
-        <p class="note">
-          Grants <strong>Gmail Read-Only</strong> so we can find “welcome/confirmation” emails that approximate join dates.<br>
-          On the Google screen, check the <strong>“See your Gmail messages”</strong> permission.
-        </p>
-        <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
-      </div>
-
-      <div class="col">
-        <h3>Option B: Manual Month & Year (no login)</h3>
-        <p class="note">Enter the month and year you joined any of these platforms. Fill as many as you like.</p>
-
-        <form method="POST" action="{{ url_for('results') }}">
-          <div class="row" style="gap:12px; align-items:flex-end;">
-            {% set platforms = [
-              ('twitter','Twitter / X'),
-              ('instagram','Instagram'),
-              ('linkedin','LinkedIn'),
-              ('dropbox','Dropbox'),
-              ('openai','OpenAI / ChatGPT'),
-              ('spotify','Spotify'),
-              ('reddit','Reddit'),
-              ('amazonprime','Amazon Prime')
-            ] %}
-
-            {% for key, label in platforms %}
-            <div class="col" style="min-width:220px;">
-              <label><strong>{{ label }}</strong></label>
-              <div style="display:flex; gap:6px; margin-top:6px;">
-                <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
-                  <option value="">Month</option>
-                  {% for month in months %}
-                    <option value="{{ loop.index }}">{{ month }}</option>
-                  {% endfor %}
-                </select>
-                <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
-                  <option value="">Year</option>
-                  {% for year in years %}
-                    <option value="{{ year }}">{{ year }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-
-          <div style="margin-top:12px;">
-            <button class="btn" type="submit">Show my results</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <p class="note" style="margin-top:16px;">We’ll plot each platform where we can determine a join date (from Google or your entries).</p>
+    <p class="note">Find out how early you joined the major platforms.</p>
   </div>
+
+  <div class="card">
+    <h3>Option A — automatically find verified dates</h3>
+    <p class="note">Grant <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails. On Google's screen, check <strong>“See your Gmail messages”</strong>.</p>
+    <a class="btn" id="googleBtn" href="#">Continue with Google verification</a>
+  </div>
+
+  <div class="card">
+    <h3>Option B — manually enter dates</h3>
+    <p class="note">Enter when you joined. Fill in as many as you like.</p>
+
+    <form id="manualForm" method="POST" action="{{ url_for('results') }}">
+      {% set platforms = [
+        ('facebook','Facebook'),
+        ('twitter','Twitter / X'),
+        ('instagram','Instagram'),
+        ('linkedin','LinkedIn'),
+        ('dropbox','Dropbox'),
+        ('openai','OpenAI / ChatGPT'),
+        ('spotify','Spotify'),
+        ('reddit','Reddit'),
+        ('amazonprime','Amazon Prime')
+      ] %}
+
+      {% set logos = {
+        'facebook': 'https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png',
+        'twitter': 'https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg',
+        'instagram': 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png',
+        'linkedin': 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg',
+        'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
+        'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
+        'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
+        'reddit': 'https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg',
+        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg'
+      } %}
+
+      {% set months = months %}
+      {% set years = years %}
+
+      <div>
+        {% for key, label in platforms %}
+          <div class="platform-row">
+            <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" onerror="this.style.display='none'"/>
+            <div class="name">{{ label }}</div>
+            <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
+              <option value="">Month</option>
+              {% for month in months %}<option value="{{ loop.index }}">{{ month }}</option>{% endfor %}
+            </select>
+            <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
+              <option value="">Year</option>
+              {% for year in years %}<option value="{{ year }}">{{ year }}</option>{% endfor %}
+            </select>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div style="margin-top:10px;">
+        <button class="btn" type="submit">Continue without verification</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    // Save manual form state before Google redirect so those dates are honored
+    const googleBtn = document.getElementById('googleBtn');
+    googleBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const form = document.getElementById('manualForm');
+      const data = {};
+      new FormData(form).forEach((v, k) => data[k] = v);
+      try {
+        await fetch('{{ url_for("save_manual") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+      } catch (err) {
+        console.warn('Save manual failed (continuing anyway)', err);
+      }
+      window.location.href = '{{ url_for("login_google") }}';
+    });
+  </script>
 {% endblock %}
