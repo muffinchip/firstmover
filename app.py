@@ -1,6 +1,8 @@
 import os
 import json
 import uuid
+import time
+import logging
 from datetime import datetime, timedelta, timezone, date
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
@@ -9,6 +11,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from sqlalchemy import create_engine, text
 
+# ---------------- Logging ----------------
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("firstmover")
+
+# ---------------- DB (optional) ----------------
 DB_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DB_URL, pool_pre_ping=True) if DB_URL else None
 
@@ -66,6 +73,7 @@ def getenv(name, default=None):
         raise RuntimeError(f"Missing environment variable: {name}")
     return v
 
+# ---------------- Flask/Auth ----------------
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.secret_key = getenv("SECRET_KEY", "dev-secret")
@@ -82,6 +90,7 @@ oauth.register(
     client_kwargs={"scope": "openid email https://www.googleapis.com/auth/gmail.readonly"},
 )
 
+# ---------------- Data ----------------
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
 CURVES = json.load(open(DATA_PATH))
 
@@ -100,124 +109,77 @@ LOGO_URLS = {
     "amazonprime":"https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"
 }
 
+# ---------------- Gmail Helpers (optimized) ----------------
 def token_has_gmail_scope(token):
     if not token: return False
     scopes = token.get("scope") or token.get("scopes")
     if isinstance(scopes, str): scopes = scopes.split()
     return scopes and "https://www.googleapis.com/auth/gmail.readonly" in scopes
 
-def ms_to_pretty(ms):
-    dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
-    try: return dt.strftime("%B %-d, %Y")
-    except Exception: return dt.strftime("%B %d, %Y")
-def ms_to_iso(ms): return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-
-def month_year_to_ms(m, y):
-    try: return int(datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()*1000)
-    except: return None
-
-def abs_month_diff(a, b):
-    return abs((a.year*12+a.month) - (b.year*12+b.month))
-def month_diff(a, b): return (b.year-a.year)*12 + (b.month-a.month)
-
-def gmail_service(credentials): return build("gmail","v1",credentials=credentials, cache_discovery=False)
-
-# ---------- Optimized Gmail Search Helpers (Binary Search on Date) ----------
+def gmail_service(credentials):
+    return build("gmail","v1",credentials=credentials, cache_discovery=False)
 
 def gmail_search_exists(svc, base_q, start_dt, end_dt):
-    """Return True if there's at least one message matching base_q in [start_dt, end_dt)."""
     q = f'{base_q} after:{start_dt.strftime("%Y/%m/%d")} before:{end_dt.strftime("%Y/%m/%d")}'
     resp = svc.users().messages().list(userId="me", maxResults=1, q=q).execute()
-    return bool(resp.get("messages"))
+    return bool(resp.get("messages")), q
 
-def gmail_find_earliest_hit_ts(svc, base_q, start_dt, end_dt):
-    """Binary-search the date to find the earliest hit for base_q within [start_dt, end_dt)."""
-    lo = start_dt
-    hi = end_dt
-    # If there's no message at all in range, exit early
-    if not gmail_search_exists(svc, base_q, lo, hi):
-        return None
-
-    # Narrow until window <= 14 days
-    while (hi - lo).days > 14:
-        mid = lo + (hi - lo) / 2
-        if gmail_search_exists(svc, base_q, lo, mid):
-            hi = mid
-        else:
-            lo = mid
-
-    # Fetch the oldest message within the final small window
-    q = f'{base_q} after:{lo.strftime("%Y/%m/%d")} before:{hi.strftime("%Y/%m/%d")}'
+def gmail_window_oldest_ts(svc, q, max_pages=2):
     page = None
     last = None
-    page_count = 0
+    seen_pages = 0
     while True:
         resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page, q=q).execute()
         ids = resp.get("messages", [])
         if ids:
-            last = ids[-1]["id"]  # messages are newest first; last is oldest in this page
+            last = ids[-1]["id"]
         page = resp.get("nextPageToken")
-        page_count += 1
-        if not page or page_count >= 5:  # hard cap pages in narrow window
+        seen_pages += 1
+        if not page or seen_pages >= max_pages:
             break
     if not last:
         return None
     msg = svc.users().messages().get(userId="me", id=last, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
-    """Try multiple queries; for each, binary-search by date between launch and today, and return earliest ms."""
-    svc = gmail_service(credentials)
-    # Use platform launch date as the lower bound to avoid scanning entire mailbox
-    ld = CURVES.get(platform_key, {}).get("launch_date")
-    if ld:
-        start_dt = datetime.strptime(ld, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    else:
-        # default to 2004-01-01 if unknown
-        start_dt = datetime(2004, 1, 1, tzinfo=timezone.utc)
-    end_dt = datetime.now(timezone.utc) + timedelta(days=1)
+def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget_s=4.0):
+    """Coarse-to-fine scan with time budget + capped pages. Returns earliest hit ts or None."""
+    t0 = time.time()
+    api_calls = 0
+    # 1) Coarse scan by year buckets (3-year windows) to locate earliest hit window fast
+    step_years = 3
+    probe_start = start_dt
+    found_window = None
+    while probe_start < end_dt and (time.time()-t0) < time_budget_s:
+        probe_end = min(datetime(probe_start.year + step_years, probe_start.month, probe_start.day, tzinfo=probe_start.tzinfo), end_dt)
+        exists, q = gmail_search_exists(svc, base_q, probe_start, probe_end)
+        api_calls += 1
+        if exists:
+            found_window = (probe_start, probe_end)
+            break
+        probe_start = probe_end
 
-    best = None
-    for q in queries:
-        try:
-            ts = gmail_find_earliest_hit_ts(svc, q, start_dt, end_dt)
-        except Exception:
-            ts = None
-        if ts is not None and (best is None or ts < best):
-            best = ts
-    return best
+    if not found_window:
+        log.info(f"[gmail-scan] no coarse window for q='{base_q}' ({api_calls} calls, {time.time()-t0:.2f}s)")
+        return None
 
-# ---------- Existing Gmail Baseline (first message) ----------
+    # 2) Binary-search inside the found window
+    lo, hi = found_window
+    while (hi - lo).days > 14 and (time.time()-t0) < time_budget_s:
+        mid = lo + (hi - lo) / 2
+        exists, q = gmail_search_exists(svc, base_q, lo, mid)
+        api_calls += 1
+        if exists:
+            hi = mid
+        else:
+            lo = mid
 
-def gmail_has_before(service, dt):
-    q=f"before:{dt.strftime('%Y/%m/%d')}"
-    return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
+    # 3) Final fetch within narrowed window (<=14d), capped pages
+    q = f'{base_q} after:{lo.strftime("%Y/%m/%d")} before:{hi.strftime("%Y/%m/%d")}'
+    ts = gmail_window_oldest_ts(svc, q, max_pages=2)
+    log.info(f"[gmail-scan] q='{base_q}' -> ts={ts} (calls={api_calls}, window={lo.date()}..{hi.date()}, elapsed={time.time()-t0:.2f}s)")
+    return ts
 
-def gmail_find_first_day(service):
-    lo=datetime(2004,1,1,tzinfo=timezone.utc); hi=datetime.now(timezone.utc)+timedelta(days=1)
-    for _ in range(32):
-        mid=lo+(hi-lo)/2
-        if gmail_has_before(service, mid): hi=mid
-        else: lo=mid
-    return (hi-timedelta(days=1)).date()
-
-def gmail_first_msg_ms(credentials):
-    svc=gmail_service(credentials)
-    d=gmail_find_first_day(svc)
-    start=d - timedelta(days=3); end=d + timedelta(days=11)
-    q=f"after:{start.strftime('%Y/%m/%d')} before:{end.strftime('%Y/%m/%d')}"
-    page=None; last=None
-    while True:
-        resp=svc.users().messages().list(userId='me',maxResults=500,pageToken=page,q=q).execute()
-        ids=resp.get("messages",[])
-        if ids: last=ids[-1]["id"]
-        page=resp.get("nextPageToken")
-        if not page: break
-    if not last: return None
-    msg=svc.users().messages().get(userId='me',id=last,format="metadata").execute()
-    return int(msg.get("internalDate"))
-
-# ---------- Broadened multi-try query sets ----------
 WELCOME_QUERY_SETS = {
     "reddit": [
         'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm) -subject:password -subject:reset',
@@ -257,6 +219,30 @@ WELCOME_QUERY_SETS = {
     ],
 }
 
+def platform_launch_dt(platform_key):
+    ld = CURVES.get(platform_key,{}).get("launch_date")
+    if ld:
+        return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return datetime(2004,1,1,tzinfo=timezone.utc)
+
+def gmail_oldest_from_queries_bounded(credentials, platform_key, queries, time_budget_s=4.0):
+    """Try multiple queries (most-specific first) within a shared time budget; return earliest ts."""
+    svc = gmail_service(credentials)
+    start_dt = platform_launch_dt(platform_key)
+    end_dt = datetime.now(timezone.utc) + timedelta(days=1)
+    t0 = time.time()
+    best = None
+    for q in queries:
+        remaining = time_budget_s - (time.time() - t0)
+        if remaining <= 0:
+            log.info(f"[gmail-scan] time budget exhausted for {platform_key}")
+            break
+        ts = gmail_find_earliest_hit_ts_bisect(svc, q, start_dt, end_dt, time_budget_s=remaining)
+        if ts is not None and (best is None or ts < best):
+            best = ts
+    return best
+
+# --------- Adoption curves helpers (unchanged) ---------
 def parse_timeline(platform):
     tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
     return tl
@@ -299,6 +285,7 @@ def before_pct(joined, today):
     if not joined or not today: return None
     return round(100*(1-(joined/today)),1)
 
+# ---------------- Routes ----------------
 @app.route("/")
 def index():
     months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
@@ -356,6 +343,7 @@ def get_google_credentials():
 
 @app.route("/results", methods=["GET","POST"])
 def results():
+    req_t0 = time.time()
     platform_keys=["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
     manual = session.get("manual_entries", {}) if request.method=="GET" else {}
 
@@ -376,17 +364,25 @@ def results():
         for k, query_list in WELCOME_QUERY_SETS.items():
             if k not in platform_keys: 
                 continue
+            t0 = time.time()
             try:
-                ts = gmail_oldest_from_queries_bisect(creds, k, query_list)
-            except Exception:
+                ts = gmail_oldest_from_queries_bounded(creds, k, query_list, time_budget_s=4.0)
+            except Exception as e:
+                log.exception(f"[gmail-scan] {k} failed: {e}")
                 ts = None
+            log.info(f"[gmail-scan] {k} result={ts} elapsed={time.time()-t0:.2f}s")
             if ts: gmail_hits[k]=ts
 
     gmail_baseline=None
     if creds:
-        try: gmail_baseline=gmail_first_msg_ms(creds)
-        except Exception as e: print("gmail baseline failed:", e)
+        try:
+            t0=time.time()
+            gmail_baseline=gmail_first_msg_ms(creds)
+            log.info(f"[gmail-first] baseline_ts={gmail_baseline} elapsed={time.time()-t0:.2f}s")
+        except Exception as e:
+            log.exception(f"[gmail-first] baseline failed: {e}")
 
+    # Resolve dates
     def ms_to_iso(ms): 
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
@@ -394,13 +390,6 @@ def results():
         dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
         try: return dt.strftime("%B %-d, %Y")
         except Exception: return dt.strftime("%B %d, %Y")
-
-    def launch_date(platform):
-        ld = CURVES.get(platform,{}).get("launch_date")
-        if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
-        tl=parse_timeline(platform); return tl[0][0] if tl else None
-
-    def month_diff(a, b): return (b.year-a.year)*12 + (b.month-a.month)
 
     resolved={}
     for k in platform_keys:
@@ -417,6 +406,7 @@ def results():
         elif m_ms:
             resolved[k]={"date_ms":m_ms,"verified":False,"email_hint_ms":None}
 
+    # Build platform cards
     platforms=[]; all_pcts=[]; v_pcts=[]
     if gmail_baseline:
         add_card(platforms, all_pcts, v_pcts, "gmail", gmail_baseline, True, None)
@@ -437,13 +427,15 @@ def results():
 
     uid=session.get("uid") or str(uuid.uuid4()); session["uid"]=uid
     try: save_results(uid, platforms, score_all, score_verified)
-    except Exception as e: print("save_results failed:", e)
+    except Exception as e: log.exception(f"save_results failed: {e}")
 
+    log.info(f"[request] /results finished in {time.time()-req_t0:.2f}s (platforms={len(platforms)})")
     return render_template("results.html",
         platforms=platforms, score=score_all, score_verified=score_verified,
         chart_labels=labels, chart_values=values, chart_verified=verified_flags, chart_logos=logos_map
     )
 
+# ---- Card builder (unchanged) ----
 def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def parse_timeline(platform):
         tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
@@ -455,7 +447,7 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def users_at(platform, when_ms):
         tl=parse_timeline(platform)
         if not tl: return None
-        when=datetime.fromtimestamp(when_ms/1000,tz=timezone.utc)
+        when=datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
         if when<=tl[0][0]: return tl[0][1]
         if when>=tl[-1][0]: return tl[-1][1]
         for (d0,u0),(d1,u1) in zip(tl, tl[1:]):
@@ -495,6 +487,13 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     months_after=(joined_dt.year-ld.year)*12 + (joined_dt.month-ld.month) if ld else 0
     y, mm = divmod(months_after, 12)
     human = (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
+    def ms_to_pretty(ms):
+        dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
+        try: return dt.strftime("%B %-d, %Y")
+        except Exception: return dt.strftime("%B %d, %Y")
+    def ms_to_iso(ms): 
+        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
     card={
         "name": PRETTY_NAMES.get(key, key.title()),
         "logo_url": LOGO_URLS.get(key,""),
@@ -510,10 +509,6 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         "verified": bool(verified)
     }
     if email_hint_ms:
-        def ms_to_pretty(ms):
-            dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
-            try: return dt.strftime("%B %-d, %Y")
-            except Exception: return dt.strftime("%B %d, %Y")
         card["email_hint"] = f"Also found in email: {ms_to_pretty(email_hint_ms)}"
     platforms.append(card)
 
