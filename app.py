@@ -9,8 +9,14 @@ from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from sqlalchemy import create_engine, text
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# --- Optional DB import (guarded) ---
+try:
+    from sqlalchemy import create_engine, text  # type: ignore
+except Exception:  # ModuleNotFoundError or others
+    create_engine = None
+    text = None
 
 # ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
@@ -18,17 +24,17 @@ log = logging.getLogger("firstmover")
 
 # ---------------- Tunables ----------------
 GLOBAL_RESULTS_BUDGET_S = float(os.getenv("FM_GLOBAL_RESULTS_BUDGET_S", "10.0"))  # total budget for /results
-PER_PLATFORM_BUDGET_S   = float(os.getenv("FM_PER_PLATFORM_BUDGET_S", "1.2"))    # budget per platform
-COARSE_STEP_YEARS       = int(os.getenv("FM_COARSE_STEP_YEARS", "5"))            # coarse bucket size
+PER_PLATFORM_BUDGET_S   = float(os.getenv("FM_PER_PLATFORM_BUDGET_S", "1.0"))    # budget per platform (tighter)
+COARSE_STEP_YEARS       = int(os.getenv("FM_COARSE_STEP_YEARS", "6"))            # coarse bucket size (coarser)
 FINAL_MAX_PAGES         = int(os.getenv("FM_FINAL_MAX_PAGES", "1"))              # pages in final narrow window
 MAX_THREADS             = int(os.getenv("FM_MAX_THREADS", "4"))                  # parallel Gmail lookups
 
 # ---------------- DB (optional) ----------------
 DB_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DB_URL, pool_pre_ping=True) if DB_URL else None
+engine = create_engine(DB_URL, pool_pre_ping=True) if (DB_URL and create_engine) else None
 
 def init_db():
-    if not engine:
+    if not engine or not text:
         return
     with engine.begin() as conn:
         conn.execute(text("""
@@ -50,7 +56,8 @@ def init_db():
 init_db()
 
 def save_results(uid, platforms, score, score_verified):
-    if not engine or not platforms:
+    # No-op if DB isn't configured or SQLAlchemy missing
+    if not engine or not text or not platforms:
         return
     run_id = str(uuid.uuid4())
     with engine.begin() as conn:
@@ -104,18 +111,6 @@ CURVES = json.load(open(DATA_PATH))
 
 METRIC_TAGS = {"gmail":"Users","facebook":"MAU","twitter":"MAU","instagram":"MAU","linkedin":"Members","dropbox":"Registered users","openai":"WAU","spotify":"MAU","reddit":"DAU","amazonprime":"Paid subscribers"}
 PRETTY_NAMES = {"gmail":"Gmail","facebook":"Facebook","twitter":"Twitter/X","instagram":"Instagram","linkedin":"LinkedIn","dropbox":"Dropbox","openai":"OpenAI/ChatGPT","spotify":"Spotify","reddit":"Reddit","amazonprime":"Amazon Prime"}
-LOGO_URLS = {
-    "gmail":"https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png",
-    "facebook":"https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png",
-    "twitter":"https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg",
-    "instagram":"https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png",
-    "linkedin":"https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg",
-    "dropbox":"https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg",
-    "openai":"https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg",
-    "spotify":"https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",
-    "reddit":"https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg",
-    "amazonprime":"https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"
-}
 
 # ---------------- Gmail Helpers (optimized + bounded) ----------------
 def token_has_gmail_scope(token):
@@ -125,7 +120,8 @@ def token_has_gmail_scope(token):
     return scopes and "https://www.googleapis.com/auth/gmail.readonly" in scopes
 
 def gmail_service(credentials):
-    return build("gmail","v1",credentials=credentials, cache_discovery=False)
+    from googleapiclient.discovery import build as _build
+    return _build("gmail","v1",credentials=credentials, cache_discovery=False)
 
 def platform_launch_dt(platform_key):
     ld = CURVES.get(platform_key,{}).get("launch_date")
@@ -156,7 +152,7 @@ def gmail_window_oldest_ts(svc, q, max_pages=1):
     msg = svc.users().messages().get(userId="me", id=last, format="metadata").execute()
     return int(msg.get("internalDate"))
 
-def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget_s=1.2, coarse_years=5):
+def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget_s=1.0, coarse_years=6):
     t0 = time.time()
     api_calls = 0
 
@@ -182,7 +178,7 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget
 
     lo, hi = found_window
     # Binary-search within window
-    while (hi - lo).days > 21 and (time.time()-t0) < time_budget_s:
+    while (hi - lo).days > 30 and (time.time()-t0) < time_budget_s:
         mid = lo + (hi - lo) / 2
         exists, q = gmail_search_exists(svc, base_q, lo, mid)
         api_calls += 1
@@ -196,8 +192,7 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget
     log.info(f"[gmail-scan] q='{base_q}' -> ts={ts} (calls={api_calls}, window={lo.date()}..{hi.date()}, elapsed={time.time()-t0:.2f}s)")
     return ts
 
-def gmail_oldest_from_queries_bounded(credentials, platform_key, queries, time_budget_s=1.2):
-    """Run query set in order; stop on first hit; respect per-platform budget."""
+def gmail_oldest_from_queries_bounded(credentials, platform_key, queries, time_budget_s=1.0):
     svc = gmail_service(credentials)
     start_dt = platform_launch_dt(platform_key)
     end_dt = datetime.now(timezone.utc) + timedelta(days=1)
@@ -221,7 +216,7 @@ def gmail_has_before(service, dt):
 
 def gmail_find_first_day(service):
     lo=datetime(2004,1,1,tzinfo=timezone.utc); hi=datetime.now(timezone.utc)+timedelta(days=1)
-    for _ in range(24):
+    for _ in range(20):
         mid=lo+(hi-lo)/2
         if gmail_has_before(service, mid): hi=mid
         else: lo=mid
@@ -279,11 +274,6 @@ def parse_timeline(platform):
     tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
     return tl
 
-def launch_date(platform):
-    ld = CURVES.get(platform,{}).get("launch_date")
-    if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
-    tl=parse_timeline(platform); return tl[0][0] if tl else None
-
 def users_at(platform, when_ms):
     tl=parse_timeline(platform)
     if not tl: return None
@@ -312,10 +302,6 @@ def timeline_series(platform):
 def early_pct(joined, today):
     if not joined or not today: return None
     return round(100*(joined/today),1)
-
-def before_pct(joined, today):
-    if not joined or not today: return None
-    return round(100*(1-(joined/today)),1)
 
 # ---------------- Routes ----------------
 @app.route("/")
@@ -467,7 +453,6 @@ def results():
     labels=[p["name"] for p in platforms]
     values=[p["percentile"] for p in platforms]
     verified_flags=[bool(p.get("verified")) for p in platforms]
-    logos_map={p["name"]: p.get("logo_url","") for p in platforms}
 
     uid=session.get("uid") or str(uuid.uuid4()); session["uid"]=uid
     try: save_results(uid, platforms, score_all, score_verified)
@@ -476,7 +461,7 @@ def results():
     log.info(f"[request] /results finished in {time.time()-req_t0:.2f}s (platforms={len(platforms)})")
     return render_template("results.html",
         platforms=platforms, score=score_all, score_verified=score_verified,
-        chart_labels=labels, chart_values=values, chart_verified=verified_flags, chart_logos=logos_map
+        chart_labels=labels, chart_values=values, chart_verified=verified_flags
     )
 
 # ---- Card builder ----
@@ -536,16 +521,15 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
     card={
         "name": PRETTY_NAMES.get(key, key.title()),
-        "logo_url": LOGO_URLS.get(key,""),
         "joined": ms_to_pretty(ts),
         "join_iso": ms_to_iso(ts),
         "percentile": pct,
-        "narrative_percent": before_pct(joined_u, today_u),
+        "narrative_percent": round(100 - pct, 1) if pct is not None else None,
         "narrative_after": human,
         "joined_users": joined_u, "today_users": today_u,
         "chart": points,
-        "metric_tag": METRIC_TAGS.get(key,"Users"),
-        "y_label": f"{METRIC_TAGS.get(key,'Users')} (Millions)",
+        "metric_tag": "Users",
+        "y_label": "Users (Millions)",
         "verified": bool(verified)
     }
     if email_hint_ms:
