@@ -410,7 +410,6 @@ def results():
     gmail_hits={}
     creds=get_google_credentials()
     if creds:
-        # Run platform lookups in parallel (bounded threads)
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
             futures = {ex.submit(_search_platform, creds, k, WELCOME_QUERY_SETS.get(k, []), PER_PLATFORM_BUDGET_S, global_deadline): k
                        for k in platform_keys if k in WELCOME_QUERY_SETS}
@@ -485,23 +484,6 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def parse_timeline(platform):
         tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
         return tl
-    def launch_date(platform):
-        ld = CURVES.get(platform,{}).get("launch_date")
-        if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
-        tl=parse_timeline(platform); return tl[0][0] if tl else None
-    def users_at(platform, when_ms):
-        tl=parse_timeline(platform)
-        if not tl: return None
-        when=datetime.fromtimestamp(when_ms/1000,tz=timezone):
-            pass
-        # Fallback: keep code concise here
-        return None
-
-def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
-    # Utilities scoped here for brevity
-    def parse_timeline(platform):
-        tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
-        return tl
     def users_at(platform, when_ms):
         tl=parse_timeline(platform)
         if not tl: return None
@@ -530,6 +512,7 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def before_pct(joined, today):
         if not joined or not today: return None
         return round(100*(1-(joined/today)),1)
+
     ld_ts = CURVES.get(key,{}).get("launch_date")
     ld = datetime.strptime(ld_ts,"%Y-%m-%d").replace(tzinfo=timezone.utc) if ld_ts else None
     if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
