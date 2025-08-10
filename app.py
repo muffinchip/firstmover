@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # --- Optional DB import (guarded) ---
 try:
     from sqlalchemy import create_engine, text  # type: ignore
-except Exception:  # ModuleNotFoundError or others
+except Exception:
     create_engine = None
     text = None
 
@@ -23,11 +23,11 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("firstmover")
 
 # ---------------- Tunables ----------------
-GLOBAL_RESULTS_BUDGET_S = float(os.getenv("FM_GLOBAL_RESULTS_BUDGET_S", "10.0"))  # total budget for /results
-PER_PLATFORM_BUDGET_S   = float(os.getenv("FM_PER_PLATFORM_BUDGET_S", "1.0"))    # budget per platform
-COARSE_STEP_YEARS       = int(os.getenv("FM_COARSE_STEP_YEARS", "6"))            # coarse bucket size if we ever add it
-FINAL_MAX_PAGES         = int(os.getenv("FM_FINAL_MAX_PAGES", "5"))              # pages in final narrow window
-MAX_THREADS             = int(os.getenv("FM_MAX_THREADS", "4"))                  # parallel Gmail lookups
+GLOBAL_RESULTS_BUDGET_S = float(os.getenv("FM_GLOBAL_RESULTS_BUDGET_S", "10.0"))
+PER_PLATFORM_BUDGET_S   = float(os.getenv("FM_PER_PLATFORM_BUDGET_S", "1.0"))
+FINAL_MAX_PAGES         = int(os.getenv("FM_FINAL_MAX_PAGES", "3"))
+MAX_THREADS             = int(os.getenv("FM_MAX_THREADS", "4"))
+GMAIL_BASELINE_BUDGET_S = float(os.getenv("FM_GMAIL_BASELINE_BUDGET_S", "2.0"))
 
 # ---------------- DB (optional) ----------------
 DB_URL = os.getenv("DATABASE_URL")
@@ -56,7 +56,6 @@ def init_db():
 init_db()
 
 def save_results(uid, platforms, score, score_verified):
-    # No-op if DB isn't configured or SQLAlchemy missing
     if not engine or not text or not platforms:
         return
     run_id = str(uuid.uuid4())
@@ -109,8 +108,15 @@ oauth.register(
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
 CURVES = json.load(open(DATA_PATH))
 
-METRIC_TAGS = {"gmail":"Users","facebook":"MAU","twitter":"MAU","instagram":"MAU","linkedin":"Members","dropbox":"Registered users","openai":"WAU","spotify":"MAU","reddit":"DAU","amazonprime":"Paid subscribers"}
-PRETTY_NAMES = {"gmail":"Gmail","facebook":"Facebook","twitter":"Twitter/X","instagram":"Instagram","linkedin":"LinkedIn","dropbox":"Dropbox","openai":"OpenAI/ChatGPT","spotify":"Spotify","reddit":"Reddit","amazonprime":"Amazon Prime"}
+METRIC_TAGS = {
+    "gmail":"Users","facebook":"MAU","twitter":"MAU","instagram":"MAU","linkedin":"Members",
+    "dropbox":"Registered users","openai":"WAU","spotify":"MAU","reddit":"DAU","amazonprime":"Paid subscribers"
+}
+PRETTY_NAMES = {
+    "gmail":"Gmail","facebook":"Facebook","twitter":"Twitter/X","instagram":"Instagram",
+    "linkedin":"LinkedIn","dropbox":"Dropbox","openai":"OpenAI/ChatGPT","spotify":"Spotify",
+    "reddit":"Reddit","amazonprime":"Amazon Prime"
+}
 LOGO_URLS = {
     "gmail":"https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png",
     "facebook":"https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png",
@@ -165,14 +171,12 @@ def gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES):
     return int(msg.get("internalDate"))
 
 def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt):
-    """Binary-search earliest hit for base_q; uses a narrow-window fetch at the end."""
     # If there's no message at all in range, exit early
     if not gmail_search_exists(svc, base_q, start_dt, end_dt):
         return None
 
     lo = start_dt
     hi = end_dt
-    # Narrow until window <= 14 days (keeps calls low; enough to isolate the welcome burst)
     while (hi - lo).days > 14:
         mid = lo + (hi - lo) / 2
         if gmail_search_exists(svc, base_q, lo, mid):
@@ -181,8 +185,7 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt):
             lo = mid
 
     q = f'{base_q} after:{lo.strftime("%Y/%m/%d")} before:{hi.strftime("%Y/%m/%d")}'
-    ts = gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES)
-    return ts
+    return gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES)
 
 def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
     svc = gmail_service(credentials)
@@ -203,17 +206,13 @@ def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
         log.info(f"[gmail-scan] {platform_key} hit via: {best_q}")
     return best
 
-# ---------- Fallbacks if strict/broad queries miss ----------
+# ---------- Fallback domain-only probes ----------
 FALLBACK_DOMAIN_QUERIES = {
-    # Minimal domain-only probes (no subject filters; still excludes password/reset noise)
-    "linkedin": [
-        'from:(messages-noreply@linkedin.com OR security-noreply@linkedin.com OR privacy-noreply@linkedin.com OR linkedin.com) -subject:password -subject:reset',
-    ],
     "reddit": [
-        'from:(redditmail.com OR reddit.com OR noreply@reddit.com OR do-not-reply@reddit.com) -subject:password -subject:reset',
+        'from:(reddit.com OR redditmail.com OR noreply@reddit.com OR do-not-reply@reddit.com) -subject:password -subject:reset'
     ],
-    "dropbox": [
-        'from:(dropbox.com OR dropboxmail.com OR no-reply@dropbox.com OR no-reply@dropboxmail.com) -subject:password -subject:reset',
+    "amazonprime": [
+        'from:(amazon.com OR no-reply@amazon.com OR prime@amazon.com OR digital-no-reply@amazon.com OR prime-enroll@amazon.com) -subject:password -subject:reset'
     ],
 }
 
@@ -221,21 +220,24 @@ def gmail_oldest_with_fallback(credentials, platform_key, queries):
     ts = gmail_oldest_from_queries_bisect(credentials, platform_key, queries)
     if ts is not None:
         return ts
-
     fb = FALLBACK_DOMAIN_QUERIES.get(platform_key, [])
-    if not fb:
-        return None
-    log.info(f"[gmail-scan] {platform_key}: trying fallback domain-only search")
-    return gmail_oldest_from_queries_bisect(credentials, platform_key, fb)
+    if fb:
+        log.info(f"[gmail-scan] {platform_key}: trying fallback domain-only search")
+        return gmail_oldest_from_queries_bisect(credentials, platform_key, fb)
+    return None
 
 # ---------- Gmail Baseline (first message) ----------
 def gmail_has_before(service, dt):
     q=f"before:{dt.strftime('%Y/%m/%d')}"
     return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
 
-def gmail_find_first_day(service):
-    lo=datetime(2004,1,1,tzinfo=timezone.utc); hi=datetime.now(timezone.utc)+timedelta(days=1)
-    for _ in range(32):
+def gmail_find_first_day(service, time_budget_s=GMAIL_BASELINE_BUDGET_S):
+    start = time.time()
+    lo=datetime(2004,1,1,tzinfo=timezone.utc)
+    hi=datetime.now(timezone.utc)+timedelta(days=1)
+    # bounded iterations
+    for _ in range(28):
+        if time.time()-start > time_budget_s: break
         mid=lo+(hi-lo)/2
         if gmail_has_before(service, mid): hi=mid
         else: lo=mid
@@ -257,19 +259,17 @@ def gmail_first_msg_ms(credentials):
     msg=svc.users().messages().get(userId='me',id=last,format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# ---------- Broadened multi-try query sets (enhanced for early hits) ----------
+# ---------- Multi-try query sets (beefed up for Reddit/Amazon) ----------
 WELCOME_QUERY_SETS = {
     "reddit": [
-        # Early welcome/verify variants + older sender patterns
-        'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm OR activate OR "confirm your email") -subject:password -subject:reset',
-        'from:(redditmail.com OR reddit.com) (welcome OR verify OR confirm OR activate OR "confirm your email") -subject:password -subject:reset',
+        'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm OR activate OR "confirm your email" OR "verify your email") -subject:password -subject:reset',
+        'from:(redditmail.com OR reddit.com) (welcome OR verify OR confirm OR activate OR "confirm your email" OR "verify your email" OR "Thanks for signing up") -subject:password -subject:reset',
     ],
     "amazonprime": [
-        'from:(no-reply@amazon.com OR prime@amazon.com OR digital-no-reply@amazon.com OR prime-enroll@amazon.com) subject:(prime OR welcome OR confirm OR verify OR activate) -subject:password -subject:reset',
-        'from:(amazon.com) (prime OR welcome OR confirm OR verify OR activate OR "thanks for joining") -subject:password -subject:reset',
+        'from:(no-reply@amazon.com OR prime@amazon.com OR digital-no-reply@amazon.com OR prime-enroll@amazon.com) subject:("Welcome to Amazon Prime" OR "Your Amazon Prime membership has begun" OR prime OR welcome OR confirm OR verify OR activate) -subject:password -subject:reset',
+        'from:(amazon.com) ("Welcome to Amazon Prime" OR "Your Amazon Prime membership has begun" OR prime OR welcome OR confirm OR verify OR activate OR "thanks for joining") -subject:password -subject:reset',
     ],
     "dropbox": [
-        # Include older mail routes + generic “activate” phrasing seen in early flows
         'from:(no-reply@dropbox.com OR dropbox@mail.dropbox.com OR no-reply@dropboxmail.com OR support@dropbox.com) subject:(welcome OR confirm OR verify OR activate) -subject:password -subject:reset',
         'from:(dropbox.com OR dropboxmail.com) (welcome OR confirm OR verify OR activate) -subject:password -subject:reset',
     ],
@@ -286,7 +286,6 @@ WELCOME_QUERY_SETS = {
         'from:(instagram.com) (welcome OR confirm OR verify OR "confirm your email" OR activate) -subject:password -subject:reset',
     ],
     "linkedin": [
-        # Add common LinkedIn sender pools seen in older mail
         'from:(messages-noreply@linkedin.com OR security-noreply@linkedin.com OR privacy-noreply@linkedin.com OR customer_service@linkedin.com OR linkedin.com) subject:(welcome OR confirm OR verify OR activate) -subject:password -subject:reset',
         'from:(linkedin.com) (welcome OR confirm OR verify OR "confirm your email" OR activate OR "Thanks for joining") -subject:password -subject:reset',
     ],
@@ -394,31 +393,15 @@ def get_google_credentials():
         scopes=["openid","email","https://www.googleapis.com/auth/gmail.readonly"],
     )
 
-def _search_platform(creds, key, queries, per_platform_budget, global_deadline):
-    """Wrapper that keeps within a global budget and logs outcome."""
-    started = time.time()
-    try:
-        remain_global = max(0.0, global_deadline - started)
-        budget = min(per_platform_budget, remain_global)
-        if budget <= 0:
-            return key, None, 0.0
-        # Use fallback-aware search for better early hits
-        ts = gmail_oldest_with_fallback(creds, key, queries)
-        elapsed = time.time() - started
-        log.info(f"[gmail-scan] {key} result={ts} elapsed={elapsed:.2f}s (budget~{budget:.2f}s)")
-        return key, ts, elapsed
-    except Exception as e:
-        log.exception(f"[gmail-scan] {key} failed: {e}")
-        return key, None, time.time() - started
-
 @app.route("/results", methods=["GET","POST"])
 def results():
     req_t0 = time.time()
     global_deadline = req_t0 + GLOBAL_RESULTS_BUDGET_S
 
     platform_keys=["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
-    manual = session.get("manual_entries", {}) if request.method=="GET" else {}
 
+    # 1) Merge manual entries (works whether you clicked Google or submitted the form)
+    manual = session.get("manual_entries", {}) if request.method=="GET" else {}
     if request.method=="POST":
         for k in platform_keys:
             m=request.form.get(f"{k}_join_month"); y=request.form.get(f"{k}_join_year")
@@ -430,21 +413,10 @@ def results():
                 if ms: manual[k]=ms
         session["manual_entries"]=manual
 
-    gmail_hits={}
+    # 2) Always do Gmail baseline FIRST (bounded) so it doesn't get starved
+    gmail_baseline=None
     creds=get_google_credentials()
     if creds:
-        with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
-            futures = {ex.submit(_search_platform, creds, k, WELCOME_QUERY_SETS.get(k, []), PER_PLATFORM_BUDGET_S, global_deadline): k
-                       for k in platform_keys if k in WELCOME_QUERY_SETS}
-            for fut in as_completed(futures):
-                k, ts, elapsed = fut.result()
-                if ts: gmail_hits[k]=ts
-                if time.time() > global_deadline:
-                    log.info("[gmail-scan] global budget exhausted; skipping remaining lookups")
-                    break
-
-    gmail_baseline=None
-    if creds and time.time() < global_deadline:
         try:
             t0=time.time()
             gmail_baseline=gmail_first_msg_ms(creds)
@@ -452,13 +424,25 @@ def results():
         except Exception as e:
             log.exception(f"[gmail-first] baseline failed: {e}")
 
-    def ms_to_iso(ms): 
-        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-    def ms_to_pretty(ms):
-        dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
-        try: return dt.strftime("%B %-d, %Y")
-        except Exception: return dt.strftime("%B %d, %Y")
+    # 3) Gmail platform lookups in parallel, bounded by the remaining global budget
+    gmail_hits={}
+    if creds and time.time() < global_deadline:
+        with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
+            futures = {
+                ex.submit(
+                    _search_platform, creds, k, WELCOME_QUERY_SETS.get(k, []),
+                    PER_PLATFORM_BUDGET_S, global_deadline
+                ): k
+                for k in platform_keys if k in WELCOME_QUERY_SETS
+            }
+            for fut in as_completed(futures):
+                k, ts, elapsed = fut.result()
+                if ts: gmail_hits[k]=ts
+                if time.time() > global_deadline:
+                    log.info("[gmail-scan] global budget exhausted; skipping remaining lookups")
+                    break
 
+    # 4) Resolve conflicts (manual vs verified) using your 12-month rule
     resolved={}
     for k in platform_keys:
         m_ms=manual.get(k); g_ms=gmail_hits.get(k)
@@ -474,6 +458,7 @@ def results():
         elif m_ms:
             resolved[k]={"date_ms":m_ms,"verified":False,"email_hint_ms":None}
 
+    # 5) Build cards + scores
     platforms=[]; all_pcts=[]; v_pcts=[]
     if gmail_baseline:
         add_card(platforms, all_pcts, v_pcts, "gmail", gmail_baseline, True, None)
@@ -490,7 +475,7 @@ def results():
     labels=[p["name"] for p in platforms]
     values=[p["percentile"] for p in platforms]
     verified_flags=[bool(p.get("verified")) for p in platforms]
-    logos_map={p["name"]: LOGO_URLS.get(p["name"].lower().split('/')[0], "") for p in platforms}  # conservative
+    logos_map={p["name"]: LOGO_URLS.get(next((k for k,v in PRETTY_NAMES.items() if v==p["name"]), ""), "") for p in platforms}
 
     uid=session.get("uid") or str(uuid.uuid4()); session["uid"]=uid
     try: save_results(uid, platforms, score_all, score_verified)
@@ -502,7 +487,6 @@ def results():
         chart_labels=labels, chart_values=values, chart_verified=verified_flags, chart_logos=logos_map
     )
 
-# ---- Card builder ----
 def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def parse_timeline(platform):
         tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
@@ -536,7 +520,6 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         if not joined or not today: return None
         return round(100*(1-(joined/today)),1)
 
-    # snap pre-launch to launch date
     ld_ts = CURVES.get(key,{}).get("launch_date")
     ld = datetime.strptime(ld_ts,"%Y-%m-%d").replace(tzinfo=timezone.utc) if ld_ts else None
     if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
@@ -552,15 +535,18 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
 
     points=timeline_series(key)
     joined_dt=datetime.fromtimestamp(ts/1000,tz=timezone.utc)
-    months_after=(joined_dt.year-(ld.year if ld else joined_dt.year))*12 + (joined_dt.month-(ld.month if ld else joined_dt.month)) if ld else 0
-    y, mm = divmod(max(0, months_after), 12)
+    months_after = 0
+    if ld:
+        months_after=(joined_dt.year-ld.year)*12 + (joined_dt.month-ld.month)
+        if months_after < 0: months_after = 0
+    y, mm = divmod(months_after, 12)
     human = (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
 
     def ms_to_pretty(ms):
         dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
         try: return dt.strftime("%B %-d, %Y")
         except Exception: return dt.strftime("%B %d, %Y")
-    def ms_to_iso(ms): 
+    def ms_to_iso(ms):
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
     card={
@@ -581,5 +567,22 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         card["email_hint"] = f"Also found in email: {ms_to_pretty(email_hint_ms)}"
     platforms.append(card)
 
+def _search_platform(creds, key, queries, per_platform_budget, global_deadline):
+    """Keep within global budget and use fallback-aware search."""
+    started = time.time()
+    try:
+        remain_global = max(0.0, global_deadline - started)
+        budget = min(per_platform_budget, remain_global)
+        if budget <= 0:
+            return key, None, 0.0
+        ts = gmail_oldest_with_fallback(creds, key, queries)
+        elapsed = time.time() - started
+        log.info(f"[gmail-scan] {key} result={ts} elapsed={elapsed:.2f}s (budget~{budget:.2f}s)")
+        return key, ts, elapsed
+    except Exception as e:
+        log.exception(f"[gmail-scan] {key} failed: {e}")
+        return key, None, time.time() - started
+
 @app.route("/healthz")
-def healthz(): return jsonify({"ok":True})
+def healthz():
+    return jsonify({"ok":True})
