@@ -122,6 +122,73 @@ def month_diff(a, b): return (b.year-a.year)*12 + (b.month-a.month)
 
 def gmail_service(credentials): return build("gmail","v1",credentials=credentials, cache_discovery=False)
 
+# ---------- Optimized Gmail Search Helpers (Binary Search on Date) ----------
+
+def gmail_search_exists(svc, base_q, start_dt, end_dt):
+    """Return True if there's at least one message matching base_q in [start_dt, end_dt)."""
+    q = f'{base_q} after:{start_dt.strftime("%Y/%m/%d")} before:{end_dt.strftime("%Y/%m/%d")}'
+    resp = svc.users().messages().list(userId="me", maxResults=1, q=q).execute()
+    return bool(resp.get("messages"))
+
+def gmail_find_earliest_hit_ts(svc, base_q, start_dt, end_dt):
+    """Binary-search the date to find the earliest hit for base_q within [start_dt, end_dt)."""
+    lo = start_dt
+    hi = end_dt
+    # If there's no message at all in range, exit early
+    if not gmail_search_exists(svc, base_q, lo, hi):
+        return None
+
+    # Narrow until window <= 14 days
+    while (hi - lo).days > 14:
+        mid = lo + (hi - lo) / 2
+        if gmail_search_exists(svc, base_q, lo, mid):
+            hi = mid
+        else:
+            lo = mid
+
+    # Fetch the oldest message within the final small window
+    q = f'{base_q} after:{lo.strftime("%Y/%m/%d")} before:{hi.strftime("%Y/%m/%d")}'
+    page = None
+    last = None
+    page_count = 0
+    while True:
+        resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page, q=q).execute()
+        ids = resp.get("messages", [])
+        if ids:
+            last = ids[-1]["id"]  # messages are newest first; last is oldest in this page
+        page = resp.get("nextPageToken")
+        page_count += 1
+        if not page or page_count >= 5:  # hard cap pages in narrow window
+            break
+    if not last:
+        return None
+    msg = svc.users().messages().get(userId="me", id=last, format="metadata").execute()
+    return int(msg.get("internalDate"))
+
+def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
+    """Try multiple queries; for each, binary-search by date between launch and today, and return earliest ms."""
+    svc = gmail_service(credentials)
+    # Use platform launch date as the lower bound to avoid scanning entire mailbox
+    ld = CURVES.get(platform_key, {}).get("launch_date")
+    if ld:
+        start_dt = datetime.strptime(ld, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        # default to 2004-01-01 if unknown
+        start_dt = datetime(2004, 1, 1, tzinfo=timezone.utc)
+    end_dt = datetime.now(timezone.utc) + timedelta(days=1)
+
+    best = None
+    for q in queries:
+        try:
+            ts = gmail_find_earliest_hit_ts(svc, q, start_dt, end_dt)
+        except Exception:
+            ts = None
+        if ts is not None and (best is None or ts < best):
+            best = ts
+    return best
+
+# ---------- Existing Gmail Baseline (first message) ----------
+
 def gmail_has_before(service, dt):
     q=f"before:{dt.strftime('%Y/%m/%d')}"
     return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
@@ -150,7 +217,7 @@ def gmail_first_msg_ms(credentials):
     msg=svc.users().messages().get(userId='me',id=last,format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# Broadened, multi-try queries per platform (most-specific first)
+# ---------- Broadened multi-try query sets ----------
 WELCOME_QUERY_SETS = {
     "reddit": [
         'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm) -subject:password -subject:reset',
@@ -189,39 +256,6 @@ WELCOME_QUERY_SETS = {
         'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) -subject:password -subject:reset',
     ],
 }
-
-def gmail_oldest_for_query(credentials, q):
-    """Return ms timestamp of the oldest hit for a single Gmail search query."""
-    svc = gmail_service(credentials)
-    page = None
-    last = None
-    pages = 0
-    while True:
-        resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page, q=q).execute()
-        ids = resp.get("messages", [])
-        if ids:
-            last = ids[-1]["id"]
-        page = resp.get("nextPageToken")
-        pages += 1
-        if not page or pages > 50:
-            break
-    if not last:
-        return None
-    msg = svc.users().messages().get(userId="me", id=last, format="metadata").execute()
-    return int(msg.get("internalDate"))
-
-def gmail_oldest_from_queries(credentials, queries):
-    """Try multiple queries (most-specific first). Return earliest timestamp found (ms)."""
-    best_ts = None
-    for q in queries:
-        try:
-            ts = gmail_oldest_for_query(credentials, q)
-        except Exception:
-            ts = None
-        if ts is not None:
-            if best_ts is None or ts < best_ts:
-                best_ts = ts
-    return best_ts
 
 def parse_timeline(platform):
     tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
@@ -339,12 +373,11 @@ def results():
     gmail_hits={}
     creds=get_google_credentials()
     if creds:
-        # Try multiple queries per platform; pick earliest
         for k, query_list in WELCOME_QUERY_SETS.items():
             if k not in platform_keys: 
                 continue
             try:
-                ts = gmail_oldest_from_queries(creds, query_list)
+                ts = gmail_oldest_from_queries_bisect(creds, k, query_list)
             except Exception:
                 ts = None
             if ts: gmail_hits[k]=ts
@@ -422,7 +455,7 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def users_at(platform, when_ms):
         tl=parse_timeline(platform)
         if not tl: return None
-        when=datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
+        when=datetime.fromtimestamp(when_ms/1000,tz=timezone.utc)
         if when<=tl[0][0]: return tl[0][1]
         if when>=tl[-1][0]: return tl[-1][1]
         for (d0,u0),(d1,u1) in zip(tl, tl[1:]):
