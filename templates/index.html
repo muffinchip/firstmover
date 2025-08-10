@@ -1,89 +1,135 @@
 {% extends "layout.html" %}
+{% block title %}FirstMover — Early Adopter Score{% endblock %}
 {% block body %}
-  <div class="card">
-    <h1>FirstMover — Early Adopter Score</h1>
-    <p class="note">Find out how early you joined the major platforms.</p>
-  </div>
+<style>
+  .fm-container{max-width:980px;margin:0 auto;padding:24px}
+  .fm-title{font-size:28px;font-weight:700;margin-bottom:4px}
+  .fm-sub{color:#555;margin-bottom:24px}
+  .fm-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width: 880px){ .fm-grid{grid-template-columns:1fr} }
+  .card{background:#fff;border:1px solid #e7e7e7;border-radius:12px;padding:18px}
+  .card h2{font-size:18px;margin:0 0 8px 0}
+  .btn{display:inline-flex;align-items:center;justify-content:center;
+       width:100%;padding:12px 14px;border-radius:10px;border:1px solid #1f6feb;
+       background:#1f6feb;color:white;text-decoration:none;font-size:16px;
+       font-weight:600;cursor:pointer}
+  .btn.secondary{background:#fff;color:#1f6feb}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .platform-list{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+  @media (max-width: 880px){ .platform-list{grid-template-columns:1fr} }
+  .select{width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:8px}
+  .hint{font-size:12px;color:#666;margin-top:8px}
+  .footnote{font-size:12px;color:#666;margin-top:14px}
+</style>
 
-  <div class="card">
-    <h3>Option A — automatically find verified dates</h3>
-    <p class="note">Grant <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails. On Google's screen, check <strong>“See your Gmail messages”</strong>.</p>
-    <a class="btn" id="googleBtn" href="#">Continue with Google verification</a>
-  </div>
+<div class="fm-container">
+  <div class="fm-title">FirstMover</div>
+  <div class="fm-sub">Find out how early you joined the major platforms.</div>
 
-  <div class="card">
-    <h3>Option B — manually enter dates</h3>
-    <p class="note">Enter when you joined. Fill in as many as you like.</p>
+  <div class="fm-grid">
 
-    <form id="manualForm" method="POST" action="{{ url_for('results') }}">
-      {% set platforms = [
-        ('facebook','Facebook'),
-        ('twitter','Twitter / X'),
-        ('instagram','Instagram'),
-        ('linkedin','LinkedIn'),
-        ('dropbox','Dropbox'),
-        ('openai','OpenAI / ChatGPT'),
-        ('spotify','Spotify'),
-        ('reddit','Reddit'),
-        ('amazonprime','Amazon Prime')
-      ] %}
+    <!-- Option A -->
+    <div class="card">
+      <h2>Option A — automatically find verified dates</h2>
+      <p>We’ll scan your Gmail for welcome/verify emails to confirm when you joined each platform (read-only).</p>
 
-      {% set logos = {
-        'facebook': 'https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png',
-        'twitter': 'https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg',
-        'instagram': 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png',
-        'linkedin': 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg',
-        'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
-        'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
-        'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
-        'reddit': 'https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg',
-        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg'
-      } %}
-
-      {% set months = months %}
-      {% set years = years %}
-
-      <div>
+      <div class="platform-list" id="manual-grid-a">
+        {% set platforms = [
+          ("facebook","Facebook"), ("twitter","Twitter/X"), ("instagram","Instagram"), ("linkedin","LinkedIn"),
+          ("dropbox","Dropbox"), ("openai","OpenAI/ChatGPT"), ("spotify","Spotify"), ("reddit","Reddit"),
+          ("amazonprime","Amazon Prime")
+        ] %}
         {% for key, label in platforms %}
-          <div class="platform-row">
-            <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" onerror="this.style.display='none'"/>
-            <div class="name">{{ label }}</div>
-            <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
-              <option value="">Month</option>
-              {% for month in months %}<option value="{{ loop.index }}">{{ month }}</option>{% endfor %}
-            </select>
-            <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
-              <option value="">Year</option>
-              {% for year in years %}<option value="{{ year }}">{{ year }}</option>{% endfor %}
-            </select>
-          </div>
+        <div class="row" data-key="{{key}}">
+          <div style="min-width:110px;font-weight:600">{{label}}</div>
+          <select class="select" name="{{key}}_join_month" aria-label="{{label}} month">
+            <option value="">Month</option>
+            {% for i, m in enumerate(months, start=1) %}
+              <option value="{{i}}">{{m}}</option>
+            {% endfor %}
+          </select>
+          <select class="select" name="{{key}}_join_year" aria-label="{{label}} year">
+            <option value="">Year</option>
+            {% for y in years %}
+              <option value="{{y}}">{{y}}</option>
+            {% endfor %}
+          </select>
+        </div>
         {% endfor %}
       </div>
 
-      <div style="margin-top:10px;">
-        <button class="btn" type="submit">Continue without verification</button>
+      <div style="margin-top:12px">
+        <button id="btn-google" class="btn">Continue with Google verification</button>
       </div>
-    </form>
-  </div>
+      <div class="hint">We only request <b>Gmail read-only</b> to look for welcome/verification emails. You’ll see a ✔︎ “verified” badge for platforms confirmed via email.</div>
+    </div>
 
-  <script>
-    // Save manual form state before Google redirect so those dates are honored
-    const googleBtn = document.getElementById('googleBtn');
-    googleBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      const form = document.getElementById('manualForm');
-      const data = {};
-      new FormData(form).forEach((v, k) => data[k] = v);
-      try {
-        await fetch('{{ url_for("save_manual") }}', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-      } catch (err) {
-        console.warn('Save manual failed (continuing anyway)', err);
-      }
-      window.location.href = '{{ url_for("login_google") }}';
+    <!-- Option B -->
+    <div class="card">
+      <h2>Option B — manually enter dates</h2>
+      <p>Skip verification and just use your best recall. You’ll still get a score (without the verified badge).</p>
+
+      <div class="platform-list" id="manual-grid-b">
+        {% for key, label in platforms %}
+        <div class="row" data-key="{{key}}">
+          <div style="min-width:110px;font-weight:600">{{label}}</div>
+          <select class="select" name="{{key}}_join_month" aria-label="{{label}} month">
+            <option value="">Month</option>
+            {% for i, m in enumerate(months, start=1) %}
+              <option value="{{i}}">{{m}}</option>
+            {% endfor %}
+          </select>
+          <select class="select" name="{{key}}_join_year" aria-label="{{label}} year">
+            <option value="">Year</option>
+            {% for y in years %}
+              <option value="{{y}}">{{y}}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div style="margin-top:12px">
+        <button id="btn-manual" class="btn secondary">Continue without verification</button>
+      </div>
+      <div class="footnote">Look for ✔︎ in results — that means the percentile for that platform is verified from email.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function collectManual(rootId){
+  const root = document.getElementById(rootId);
+  const payload = {};
+  root.querySelectorAll('[data-key]').forEach(row=>{
+    const key = row.getAttribute('data-key');
+    const m = row.querySelector(`select[name="${key}_join_month"]`).value;
+    const y = row.querySelector(`select[name="${key}_join_year"]`).value;
+    if(m && y){ payload[`${key}_join_month`] = m; payload[`${key}_join_year`] = y; }
+  });
+  if(Object.keys(payload).length){
+    await fetch("/save_manual", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
     });
-  </script>
+  }
+}
+
+document.getElementById('btn-google').addEventListener('click', async ()=>{
+  // Save manual entries FIRST so they’re available after Google auth redirect.
+  await collectManual('manual-grid-a');
+  window.location.href = "/login/google";
+});
+
+document.getElementById('btn-manual').addEventListener('click', async ()=>{
+  await collectManual('manual-grid-b');
+  // Submit to results without Google
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/results';
+  // Use session-stored manual payload (saved via /save_manual); nothing else is required
+  document.body.appendChild(form);
+  form.submit();
+});
+</script>
 {% endblock %}
