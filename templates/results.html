@@ -6,133 +6,109 @@
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
     <h2>Your Early Adopter Results</h2>
 
-    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-top:10px;">
-      {% if score is not none %}
-        <div><strong>Composite Percentile:</strong> {{ score }}</div>
-      {% else %}
-        <div><strong>Composite Percentile:</strong> N/A</div>
-      {% endif %}
-      {% if score_verified is not none %}
-        <div><strong>Verified Composite Percentile:</strong> {{ score_verified }} <span class="pill">✓ verified</span></div>
-      {% else %}
-        <div><strong>Verified Composite Percentile:</strong> N/A</div>
-      {% endif %}
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
+      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
     </div>
+  </div>
 
-    <div class="row" style="margin-top:18px;">
-      <div class="col">
-        <h3>Platforms</h3>
+  <div class="card">
+    <h3>Platforms</h3>
 
-        {% for p in platforms %}
-          <div class="platform">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <strong>{{ p.name }}</strong>
-                {% if p.metric_tag %}
-                  <span class="pill secondary" title="Metric used for this platform">{{ p.metric_tag }}</span>
-                {% endif %}
-                {% if p.verified %}
-                  <span class="pill" title="Verified via Gmail">✓ verified</span>
-                {% else %}
-                  <span class="pill secondary" title="Self-reported">self-report</span>
-                {% endif %}
-              </div>
-              {% if p.percentile is not none %}
-                <span class="pill">{{ p.percentile }}th percentile</span>
-              {% endif %}
+    {% for p in platforms %}
+      <div class="platform-row" style="align-items:flex-start;">
+        {% if p.logo_url %}<img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" />{% endif %}
+        <div style="flex:1;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong>{{ p.name }}</strong>
+              {% if p.metric_tag %}<span class="pill secondary">{{ p.metric_tag }}</span>{% endif %}
+              {% if p.verified %}<span class="pill">✓ verified</span>{% else %}<span class="pill secondary">self-report</span>{% endif %}
             </div>
-
-            <div class="note" style="margin-top:4px;">
-              Joined: {{ p.joined }}
-              {% if p.email_hint %}
-                <span style="margin-left:8px;">· <em>{{ p.email_hint }}</em></span>
-              {% endif %}
-            </div>
-
-            {% if p.joined_users and p.today_users %}
-              <p style="margin:8px 0 0 0;">
-                You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch,
-                before <strong>{{ p.narrative_percent }}%</strong> of current users.
-                When you joined {{ p.name }} it had approximately
-                <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
-                <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
-              </p>
-            {% endif %}
-
-            {% if p.chart and p.chart['points_m'] %}
-              <div style="margin-top:12px;">
-                <canvas id="curve-{{ loop.index }}"></canvas>
-              </div>
-              <script>
-                (function(){
-                  const points = {{ p.chart['points_m']|tojson }};
-                  const joinISO = "{{ p.join_iso or '' }}";
-                  const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
-                  const metricTag = "{{ p.metric_tag or 'Users' }}";
-                  const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
-
-                  const joinMarkerPlugin = {
-                    id: 'joinMarker{{ loop.index }}',
-                    afterDraw(chart) {
-                      if (!joinISO) return;
-                      const x = chart.scales.x.getPixelForValue(new Date(joinISO));
-                      if (!isFinite(x)) return;
-                      const { top, bottom } = chart.chartArea;
-                      const c = chart.ctx;
-                      c.save();
-                      c.setLineDash([6,4]);
-                      c.lineWidth = 1.5;
-                      c.beginPath();
-                      c.moveTo(x, top);
-                      c.lineTo(x, bottom);
-                      c.stroke();
-                      // small arrow
-                      c.setLineDash([]);
-                      c.beginPath();
-                      c.moveTo(x, top);
-                      c.lineTo(x - 6, top + 12);
-                      c.lineTo(x + 6, top + 12);
-                      c.closePath();
-                      c.fill();
-                      c.restore();
-                    }
-                  };
-
-                  new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                      datasets: [{
-                        label: metricTag + ' (Millions)',
-                        data: points,
-                        tension: 0.1,
-                        fill: false,
-                        spanGaps: true
-                      }]
-                    },
-                    options: {
-                      plugins: {
-                        legend: { display: false },
-                        tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } }
-                      },
-                      scales: {
-                        x: { type:'time', time:{ unit:'year', tooltipFormat:'MMM d, yyyy' }, ticks:{ maxRotation:0, autoSkip:true }, title:{ display:true, text:'Year' } },
-                        y: { beginAtZero:true, title:{ display:true, text:yLabel } }
-                      }
-                    },
-                    plugins: [joinMarkerPlugin]
-                  });
-                })();
-              </script>
-            {% endif %}
+            {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
           </div>
-        {% endfor %}
-      </div>
 
-      <div class="col">
-        <h3>Your place on the curve</h3>
-        <canvas id="curveChart"></canvas>
+          <div class="note" style="margin-top:4px;">
+            Joined: {{ p.joined }}
+            {% if p.email_hint %}<span style="margin-left:8px;">· <em>{{ p.email_hint }}</em></span>{% endif %}
+          </div>
+
+          {% if p.joined_users and p.today_users %}
+            <p style="margin:8px 0 0 0;">
+              You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch,
+              before <strong>{{ p.narrative_percent }}%</strong> of current users.
+              When you joined {{ p.name }} it had approximately
+              <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
+              <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
+            </p>
+          {% endif %}
+
+          {% if p.chart and p.chart['points_m'] %}
+            <div style="margin-top:10px; width:100%;">
+              <canvas id="curve-{{ loop.index }}"></canvas>
+            </div>
+            <script>
+              (function(){
+                const points = {{ p.chart['points_m']|tojson }};
+                const joinISO = "{{ p.join_iso or '' }}";
+                const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
+                const metricTag = "{{ p.metric_tag or 'Users' }}";
+                const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
+
+                const joinMarkerPlugin = {
+                  id: 'joinMarker{{ loop.index }}',
+                  afterDraw(chart) {
+                    if (!joinISO) return;
+                    const x = chart.scales.x.getPixelForValue(new Date(joinISO));
+                    if (!isFinite(x)) return;
+                    const { top, bottom } = chart.chartArea;
+                    const c = chart.ctx;
+                    c.save();
+                    c.setLineDash([6,4]);
+                    c.lineWidth = 1.5;
+                    c.beginPath();
+                    c.moveTo(x, top);
+                    c.lineTo(x, bottom);
+                    c.stroke();
+                    c.setLineDash([]);
+                    c.beginPath();
+                    c.moveTo(x, top);
+                    c.lineTo(x - 6, top + 12);
+                    c.lineTo(x + 6, top + 12);
+                    c.closePath();
+                    c.fill();
+                    c.restore();
+                  }
+                };
+
+                new Chart(ctx, {
+                  type: 'line',
+                  data: { datasets: [{ label: metricTag + ' (Millions)', data: points, fill:false, tension:0.1, spanGaps:true }] },
+                  options: {
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } } },
+                    scales: {
+                      x: { type:'time', time:{ unit:'year', tooltipFormat:'MMM d, yyyy' }, title:{ display:true, text:'Year' }, ticks:{ maxRotation:0 } },
+                      y: { beginAtZero:true, title:{ display:true, text:yLabel } }
+                    }
+                  },
+                  plugins: [joinMarkerPlugin]
+                });
+              })();
+            </script>
+          {% endif %}
+        </div>
       </div>
+      <hr style="border:none;border-top:1px dashed var(--line); margin:12px 0;">
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+      <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
+      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
     </div>
+    <h3>Your place on the curve</h3>
+    <canvas id="barChart"></canvas>
   </div>
 
   <script>
@@ -140,9 +116,8 @@
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
-    const labelToLogo = {{ chart_logos|tojson }};
 
-    const ctx = document.getElementById('curveChart').getContext('2d');
+    const ctxBar = document.getElementById('barChart').getContext('2d');
 
     const verifiedLine = {
       id: 'verifiedLine',
@@ -171,7 +146,6 @@
           const xPos = x.getPixelForValue(i);
           const yTop = y.getPixelForValue(val);
           const isVerified = verifiedFlags[i];
-          const label = labels[i];
           ctx.save();
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
@@ -182,29 +156,12 @@
       }
     };
 
-    new Chart(ctx, {
+    new Chart(ctxBar, {
       type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }]
-      },
+      data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       options: {
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                const v = ctx.parsed.y;
-                const isV = verifiedFlags[ctx.dataIndex];
-                return (isV ? '✓ ' : '') + v + 'th percentile';
-              }
-            }
-          }
-        },
-        scales: {
-          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
-          x: { title: { display: true, text: 'Platform' } }
-        }
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> (verifiedFlags[ctx.dataIndex] ? '✓ ' : '') + ctx.parsed.y + 'th percentile' } } },
+        scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } }, x: { title: { display: true, text: 'Platform' } } }
       },
       plugins: [verifiedLine, barLabels]
     });

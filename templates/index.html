@@ -2,64 +2,67 @@
 {% block body %}
   <div class="card">
     <h1>FirstMover — Early Adopter Score</h1>
-    <p class="note">Use either (or both) options below. We’ll only show a platform once we have a join date.</p>
+    <p class="note">Use either (or both) options. We’ll only show a platform once we have a join date.</p>
+  </div>
 
-    <div class="row" style="align-items:flex-start; margin-top:14px;">
-      <div class="col">
-        <h3>Option A — Sign in with Google</h3>
-        <p class="note">
-          Grants <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails that approximate join dates.
-          On the Google screen, check <strong>“See your Gmail messages”</strong>.
-        </p>
-        <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
+  <div class="card">
+    <h3>Option A — Sign in with Google</h3>
+    <p class="note">Grant <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails. On Google's screen, check <strong>“See your Gmail messages”</strong>.</p>
+    <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
+  </div>
+
+  <div class="card">
+    <h3>Option B — Manual Month & Year</h3>
+    <p class="note">Enter when you joined. Fill in as many as you like.</p>
+
+    <form method="POST" action="{{ url_for('results') }}">
+      {% set platforms = [
+        ('facebook','Facebook'),
+        ('twitter','Twitter / X'),
+        ('instagram','Instagram'),
+        ('linkedin','LinkedIn'),
+        ('dropbox','Dropbox'),
+        ('openai','OpenAI / ChatGPT'),
+        ('spotify','Spotify'),
+        ('reddit','Reddit'),
+        ('amazonprime','Amazon Prime')
+      ] %}
+
+      {% set logos = {
+        'facebook': 'https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png',
+        'twitter': 'https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg',
+        'instagram': 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png',
+        'linkedin': 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg',
+        'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
+        'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
+        'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
+        'reddit': 'https://upload.wikimedia.org/wikipedia/en/5/58/Reddit_logo_new.svg',
+        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/f/f1/Prime_logo.png'
+      } %}
+
+      {% set months = months %}
+      {% set years = years %}
+
+      <div>
+        {% for key, label in platforms %}
+          <div class="platform-row">
+            <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" />
+            <div class="name">{{ label }}</div>
+            <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
+              <option value="">Month</option>
+              {% for month in months %}<option value="{{ loop.index }}">{{ month }}</option>{% endfor %}
+            </select>
+            <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
+              <option value="">Year</option>
+              {% for year in years %}<option value="{{ year }}">{{ year }}</option>{% endfor %}
+            </select>
+          </div>
+        {% endfor %}
       </div>
 
-      <div class="col">
-        <h3>Option B — Manual Month & Year</h3>
-        <p class="note">Enter the month and year you joined any of these platforms. Fill in as many as you like.</p>
-
-        <form method="POST" action="{{ url_for('results') }}">
-          <div class="row" style="gap:12px; align-items:flex-end; margin-top:8px;">
-            {% set platforms = [
-              ('facebook','Facebook'),
-              ('twitter','Twitter / X'),
-              ('instagram','Instagram'),
-              ('linkedin','LinkedIn'),
-              ('dropbox','Dropbox'),
-              ('openai','OpenAI / ChatGPT'),
-              ('spotify','Spotify'),
-              ('reddit','Reddit'),
-              ('amazonprime','Amazon Prime')
-            ] %}
-
-            {% for key, label in platforms %}
-            <div class="col" style="min-width:220px;">
-              <label><strong>{{ label }}</strong></label>
-              <div style="display:flex; gap:6px; margin-top:6px;">
-                <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
-                  <option value="">Month</option>
-                  {% for month in months %}
-                    <option value="{{ loop.index }}">{{ month }}</option>
-                  {% endfor %}
-                </select>
-                <select name="{{ key }}_join_year" aria-label="{{ label }} join year">
-                  <option value="">Year</option>
-                  {% for year in years %}
-                    <option value="{{ year }}">{{ year }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-
-          <div style="margin-top:14px;">
-            <button class="btn" type="submit">Show my results</button>
-          </div>
-        </form>
+      <div style="margin-top:10px;">
+        <button class="btn" type="submit">Show my results</button>
       </div>
-    </div>
-
-    <p class="note" style="margin-top:16px;">We’ll plot each platform where we can determine a join date (from Google or your entries).</p>
+    </form>
   </div>
 {% endblock %}
