@@ -3,33 +3,31 @@ import json
 import uuid
 import time
 import logging
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from authlib.integrations.flask_client import OAuth
 from werkzeug.middleware.proxy_fix import ProxyFix
 from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- Optional DB import (guarded) ---
+# Optional DB (guarded import)
 try:
-    from sqlalchemy import create_engine, text  # type: ignore
+    from sqlalchemy import create_engine, text
 except Exception:
     create_engine = None
     text = None
 
-# ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("firstmover")
 
-# ---------------- Tunables ----------------
+# ---- Tunables ----
 GLOBAL_RESULTS_BUDGET_S = float(os.getenv("FM_GLOBAL_RESULTS_BUDGET_S", "10.0"))
 PER_PLATFORM_BUDGET_S   = float(os.getenv("FM_PER_PLATFORM_BUDGET_S", "1.0"))
 FINAL_MAX_PAGES         = int(os.getenv("FM_FINAL_MAX_PAGES", "3"))
 MAX_THREADS             = int(os.getenv("FM_MAX_THREADS", "4"))
 GMAIL_BASELINE_BUDGET_S = float(os.getenv("FM_GMAIL_BASELINE_BUDGET_S", "2.0"))
 
-# ---------------- DB (optional) ----------------
+# ---- DB (optional) ----
 DB_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DB_URL, pool_pre_ping=True) if (DB_URL and create_engine) else None
 
@@ -87,7 +85,7 @@ def getenv(name, default=None):
         raise RuntimeError(f"Missing environment variable: {name}")
     return v
 
-# ---------------- Flask/Auth ----------------
+# ---- Flask/Auth ----
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.secret_key = getenv("SECRET_KEY", "dev-secret")
@@ -104,7 +102,7 @@ oauth.register(
     client_kwargs={"scope": "openid email https://www.googleapis.com/auth/gmail.readonly"},
 )
 
-# ---------------- Data ----------------
+# ---- Data ----
 DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "adoption_curves.json")
 CURVES = json.load(open(DATA_PATH))
 
@@ -130,7 +128,9 @@ LOGO_URLS = {
     "amazonprime":"https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"
 }
 
-# ---------- Gmail Helpers ----------
+# ---- Gmail helpers ----
+from googleapiclient.discovery import build as _build
+
 def token_has_gmail_scope(token):
     if not token: return False
     scopes = token.get("scope") or token.get("scopes")
@@ -138,7 +138,6 @@ def token_has_gmail_scope(token):
     return scopes and "https://www.googleapis.com/auth/gmail.readonly" in scopes
 
 def gmail_service(credentials):
-    from googleapiclient.discovery import build as _build
     return _build("gmail","v1",credentials=credentials, cache_discovery=False)
 
 def platform_launch_dt(platform_key):
@@ -160,7 +159,7 @@ def gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES):
         resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page, q=q).execute()
         ids = resp.get("messages", [])
         if ids:
-            last = ids[-1]["id"]  # newest first; last is oldest on this page
+            last = ids[-1]["id"]      # last on page = oldest on that page
         page = resp.get("nextPageToken")
         seen_pages += 1
         if not page or seen_pages >= max_pages:
@@ -171,10 +170,8 @@ def gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES):
     return int(msg.get("internalDate"))
 
 def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt):
-    # If there's no message at all in range, exit early
     if not gmail_search_exists(svc, base_q, start_dt, end_dt):
         return None
-
     lo = start_dt
     hi = end_dt
     while (hi - lo).days > 14:
@@ -183,15 +180,13 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt):
             hi = mid
         else:
             lo = mid
-
     q = f'{base_q} after:{lo.strftime("%Y/%m/%d")} before:{hi.strftime("%Y/%m/%d")}'
     return gmail_window_oldest_ts(svc, q, max_pages=FINAL_MAX_PAGES)
 
-def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
+def gmail_oldest_from_queries(credentials, platform_key, queries):
     svc = gmail_service(credentials)
     start_dt = platform_launch_dt(platform_key)
     end_dt = datetime.now(timezone.utc) + timedelta(days=1)
-
     best = None
     best_q = None
     for q in queries:
@@ -206,7 +201,7 @@ def gmail_oldest_from_queries_bisect(credentials, platform_key, queries):
         log.info(f"[gmail-scan] {platform_key} hit via: {best_q}")
     return best
 
-# ---------- Fallback domain-only probes ----------
+# Fallback “domain-only” probes for stubborn cases
 FALLBACK_DOMAIN_QUERIES = {
     "reddit": [
         'from:(reddit.com OR redditmail.com OR noreply@reddit.com OR do-not-reply@reddit.com) -subject:password -subject:reset'
@@ -217,16 +212,16 @@ FALLBACK_DOMAIN_QUERIES = {
 }
 
 def gmail_oldest_with_fallback(credentials, platform_key, queries):
-    ts = gmail_oldest_from_queries_bisect(credentials, platform_key, queries)
+    ts = gmail_oldest_from_queries(credentials, platform_key, queries)
     if ts is not None:
         return ts
     fb = FALLBACK_DOMAIN_QUERIES.get(platform_key, [])
     if fb:
         log.info(f"[gmail-scan] {platform_key}: trying fallback domain-only search")
-        return gmail_oldest_from_queries_bisect(credentials, platform_key, fb)
+        return gmail_oldest_from_queries(credentials, platform_key, fb)
     return None
 
-# ---------- Gmail Baseline (first message) ----------
+# First Gmail message (baseline)
 def gmail_has_before(service, dt):
     q=f"before:{dt.strftime('%Y/%m/%d')}"
     return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
@@ -235,7 +230,6 @@ def gmail_find_first_day(service, time_budget_s=GMAIL_BASELINE_BUDGET_S):
     start = time.time()
     lo=datetime(2004,1,1,tzinfo=timezone.utc)
     hi=datetime.now(timezone.utc)+timedelta(days=1)
-    # bounded iterations
     for _ in range(28):
         if time.time()-start > time_budget_s: break
         mid=lo+(hi-lo)/2
@@ -259,7 +253,7 @@ def gmail_first_msg_ms(credentials):
     msg=svc.users().messages().get(userId='me',id=last,format="metadata").execute()
     return int(msg.get("internalDate"))
 
-# ---------- Multi-try query sets (beefed up for Reddit/Amazon) ----------
+# Query sets (beefed up for Reddit/Amazon)
 WELCOME_QUERY_SETS = {
     "reddit": [
         'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm OR activate OR "confirm your email" OR "verify your email") -subject:password -subject:reset',
@@ -299,10 +293,11 @@ WELCOME_QUERY_SETS = {
     ],
 }
 
-# --------- Adoption curve helpers ---------
+# ---- Curve helpers ----
 def parse_timeline(platform):
-    tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
-    return tl
+    tl = [(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u))
+          for d,u in CURVES.get(platform,{}).get("timeline",[])]
+    return sorted(tl, key=lambda x:x[0])
 
 def users_at(platform, when_ms):
     tl=parse_timeline(platform)
@@ -318,14 +313,15 @@ def users_at(platform, when_ms):
     return tl[-1][1]
 
 def users_today(platform):
-    tl=parse_timeline(platform); return tl[-1][1] if tl else None
+    tl=parse_timeline(platform)
+    return tl[-1][1] if tl else None
 
 def timeline_series(platform):
     tl=parse_timeline(platform)
     if not tl: return {"points_m":[]}
     pts=[{"x":d.strftime("%Y-%m-%d"), "y": round(u/1_000_000,3)} for d,u in tl]
     today=datetime.now(timezone.utc).date()
-    if tl[-1][0].date()<today:
+    if tl and tl[-1][0].date()<today:
         pts.append({"x": today.strftime("%Y-%m-%d"), "y": round(tl[-1][1]/1_000_000,3)})
     return {"points_m": pts}
 
@@ -337,7 +333,7 @@ def before_pct(joined, today):
     if not joined or not today: return None
     return round(100*(1-(joined/today)),1)
 
-# ---------------- Routes ----------------
+# ---- Routes ----
 @app.route("/")
 def index():
     months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
@@ -400,7 +396,7 @@ def results():
 
     platform_keys=["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
 
-    # 1) Merge manual entries (works whether you clicked Google or submitted the form)
+    # 1) Merge manual entries (works for both flows)
     manual = session.get("manual_entries", {}) if request.method=="GET" else {}
     if request.method=="POST":
         for k in platform_keys:
@@ -413,7 +409,7 @@ def results():
                 if ms: manual[k]=ms
         session["manual_entries"]=manual
 
-    # 2) Always do Gmail baseline FIRST (bounded) so it doesn't get starved
+    # 2) Gmail baseline first (bounded)
     gmail_baseline=None
     creds=get_google_credentials()
     if creds:
@@ -424,25 +420,31 @@ def results():
         except Exception as e:
             log.exception(f"[gmail-first] baseline failed: {e}")
 
-    # 3) Gmail platform lookups in parallel, bounded by the remaining global budget
+    # 3) Gmail platform scans (parallel)
     gmail_hits={}
-    if creds and time.time() < global_deadline:
+    def _search_platform(creds_local, key, queries, per_platform_budget, global_deadline_ts):
+        started = time.time()
+        try:
+            # Use fallback-enabled search
+            ts = gmail_oldest_with_fallback(creds_local, key, queries)
+            elapsed = time.time() - started
+            log.info(f"[gmail-scan] {key} result={ts} elapsed={elapsed:.2f}s")
+            return key, ts
+        except Exception as e:
+            log.exception(f"[gmail-scan] {key} failed: {e}")
+            return key, None
+
+    if creds:
         with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
-            futures = {
-                ex.submit(
-                    _search_platform, creds, k, WELCOME_QUERY_SETS.get(k, []),
-                    PER_PLATFORM_BUDGET_S, global_deadline
-                ): k
+            futs = {
+                ex.submit(_search_platform, creds, k, WELCOME_QUERY_SETS.get(k, []), PER_PLATFORM_BUDGET_S, global_deadline): k
                 for k in platform_keys if k in WELCOME_QUERY_SETS
             }
-            for fut in as_completed(futures):
-                k, ts, elapsed = fut.result()
+            for f in as_completed(futs):
+                k, ts = f.result()
                 if ts: gmail_hits[k]=ts
-                if time.time() > global_deadline:
-                    log.info("[gmail-scan] global budget exhausted; skipping remaining lookups")
-                    break
 
-    # 4) Resolve conflicts (manual vs verified) using your 12-month rule
+    # 4) Resolve (12-month rule)
     resolved={}
     for k in platform_keys:
         m_ms=manual.get(k); g_ms=gmail_hits.get(k)
@@ -458,22 +460,71 @@ def results():
         elif m_ms:
             resolved[k]={"date_ms":m_ms,"verified":False,"email_hint_ms":None}
 
-    # 5) Build cards + scores
+    # 5) Build cards & scores (do NOT drop if curve missing)
+    def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
+        tl = parse_timeline(key)
+        joined_u = users_at(key, ts) if tl else None
+        today_u  = users_today(key)  if tl else None
+        pct = early_pct(joined_u, today_u) if (joined_u and today_u) else None
+
+        if pct is not None:
+            all_pcts.append(pct)
+            if verified: v_pcts.append(pct)
+
+        ld_ts = CURVES.get(key,{}).get("launch_date")
+        ld = datetime.strptime(ld_ts,"%Y-%m-%d").replace(tzinfo=timezone.utc) if ld_ts else None
+        # clamp to launch
+        if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
+            ts=int(ld.timestamp()*1000)
+
+        joined_dt=datetime.fromtimestamp(ts/1000,tz=timezone.utc)
+        months_after=0
+        if ld:
+            months_after=(joined_dt.year-ld.year)*12 + (joined_dt.month-ld.month)
+            if months_after<0: months_after=0
+        y, mm = divmod(months_after, 12)
+        human = (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
+
+        def ms_to_pretty(ms):
+            dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
+            try: return dt.strftime("%B %-d, %Y")
+            except Exception: return dt.strftime("%B %d, %Y")
+        def ms_to_iso(ms):
+            return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+        card = {
+            "name": PRETTY_NAMES.get(key, key.title()),
+            "logo_url": LOGO_URLS.get(key,""),
+            "joined": ms_to_pretty(ts),
+            "join_iso": ms_to_iso(ts),
+            "percentile": pct,
+            "narrative_percent": before_pct(joined_u, today_u) if pct is not None else None,
+            "narrative_after": human,
+            "joined_users": joined_u,
+            "today_users": today_u,
+            "chart": timeline_series(key) if tl else {"points_m":[]},
+            "metric_tag": METRIC_TAGS.get(key,"Users"),
+            "y_label": f"{METRIC_TAGS.get(key,'Users')} (Millions)",
+            "verified": bool(verified)
+        }
+        if email_hint_ms:
+            card["email_hint"] = f"Also found in email: {ms_to_pretty(email_hint_ms)}"
+        platforms.append(card)
+
     platforms=[]; all_pcts=[]; v_pcts=[]
     if gmail_baseline:
         add_card(platforms, all_pcts, v_pcts, "gmail", gmail_baseline, True, None)
-
     for k,info in resolved.items():
-        if k not in CURVES: continue
         add_card(platforms, all_pcts, v_pcts, k, info["date_ms"], info["verified"], info.get("email_hint_ms"))
 
     score_all = round(100*(sum([p/100.0 for p in all_pcts])/len(all_pcts)),1) if all_pcts else None
     score_verified = round(100*(sum([p/100.0 for p in v_pcts])/len(v_pcts)),1) if v_pcts else None
 
+    # keep platforms with any join date
     platforms=[p for p in platforms if p.get("join_iso")]
 
     labels=[p["name"] for p in platforms]
-    values=[p["percentile"] for p in platforms]
+    values=[p["percentile"] if p["percentile"] is not None else None for p in platforms]
     verified_flags=[bool(p.get("verified")) for p in platforms]
     logos_map={p["name"]: LOGO_URLS.get(next((k for k,v in PRETTY_NAMES.items() if v==p["name"]), ""), "") for p in platforms}
 
@@ -486,102 +537,6 @@ def results():
         platforms=platforms, score=score_all, score_verified=score_verified,
         chart_labels=labels, chart_values=values, chart_verified=verified_flags, chart_logos=logos_map
     )
-
-def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
-    def parse_timeline(platform):
-        tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
-        return tl
-    def users_at(platform, when_ms):
-        tl=parse_timeline(platform)
-        if not tl: return None
-        when=datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
-        if when<=tl[0][0]: return tl[0][1]
-        if when>=tl[-1][0]: return tl[-1][1]
-        for (d0,u0),(d1,u1) in zip(tl, tl[1:]):
-            if d0<=when<=d1:
-                span=(d1-d0).total_seconds()
-                frac=(when-d0).total_seconds()/span if span else 0
-                return round(u0 + frac*(u1-u0))
-        return tl[-1][1]
-    def users_today(platform):
-        tl=parse_timeline(platform); return tl[-1][1] if tl else None
-    def timeline_series(platform):
-        tl=parse_timeline(platform)
-        if not tl: return {"points_m":[]}
-        pts=[{"x":d.strftime("%Y-%m-%d"), "y": round(u/1_000_000,3)} for d,u in tl]
-        today=datetime.now(timezone.utc).date()
-        if tl[-1][0].date()<today:
-            pts.append({"x": today.strftime("%Y-%m-%d"), "y": round(tl[-1][1]/1_000_000,3)})
-        return {"points_m": pts}
-    def early_pct(joined, today):
-        if not joined or not today: return None
-        return round(100*(joined/today),1)
-    def before_pct(joined, today):
-        if not joined or not today: return None
-        return round(100*(1-(joined/today)),1)
-
-    ld_ts = CURVES.get(key,{}).get("launch_date")
-    ld = datetime.strptime(ld_ts,"%Y-%m-%d").replace(tzinfo=timezone.utc) if ld_ts else None
-    if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
-        ts=int(ld.timestamp()*1000)
-
-    joined_u=users_at(key, ts); today_u=users_today(key)
-    if not (joined_u and today_u): return
-
-    pct=early_pct(joined_u, today_u)
-    if pct is not None:
-        all_pcts.append(pct)
-        if verified: v_pcts.append(pct)
-
-    points=timeline_series(key)
-    joined_dt=datetime.fromtimestamp(ts/1000,tz=timezone.utc)
-    months_after = 0
-    if ld:
-        months_after=(joined_dt.year-ld.year)*12 + (joined_dt.month-ld.month)
-        if months_after < 0: months_after = 0
-    y, mm = divmod(months_after, 12)
-    human = (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
-
-    def ms_to_pretty(ms):
-        dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
-        try: return dt.strftime("%B %-d, %Y")
-        except Exception: return dt.strftime("%B %d, %Y")
-    def ms_to_iso(ms):
-        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-
-    card={
-        "name": PRETTY_NAMES.get(key, key.title()),
-        "logo_url": LOGO_URLS.get(key,""),
-        "joined": ms_to_pretty(ts),
-        "join_iso": ms_to_iso(ts),
-        "percentile": pct,
-        "narrative_percent": before_pct(joined_u, today_u),
-        "narrative_after": human,
-        "joined_users": joined_u, "today_users": today_u,
-        "chart": points,
-        "metric_tag": METRIC_TAGS.get(key,"Users"),
-        "y_label": f"{METRIC_TAGS.get(key,'Users')} (Millions)",
-        "verified": bool(verified)
-    }
-    if email_hint_ms:
-        card["email_hint"] = f"Also found in email: {ms_to_pretty(email_hint_ms)}"
-    platforms.append(card)
-
-def _search_platform(creds, key, queries, per_platform_budget, global_deadline):
-    """Keep within global budget and use fallback-aware search."""
-    started = time.time()
-    try:
-        remain_global = max(0.0, global_deadline - started)
-        budget = min(per_platform_budget, remain_global)
-        if budget <= 0:
-            return key, None, 0.0
-        ts = gmail_oldest_with_fallback(creds, key, queries)
-        elapsed = time.time() - started
-        log.info(f"[gmail-scan] {key} result={ts} elapsed={elapsed:.2f}s (budget~{budget:.2f}s)")
-        return key, ts, elapsed
-    except Exception as e:
-        log.exception(f"[gmail-scan] {key} failed: {e}")
-        return key, None, time.time() - started
 
 @app.route("/healthz")
 def healthz():

@@ -21,11 +21,11 @@
         <div style="flex:1;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:8px;">
-              <strong>{{ p.name }}</strong>
+              <span>{{ p.name }}</span>
               {% if p.metric_tag %}<span class="pill secondary">{{ p.metric_tag }}</span>{% endif %}
               {% if p.verified %}<span class="pill">✓ verified</span>{% else %}<span class="pill secondary">self-report</span>{% endif %}
             </div>
-            {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% endif %}
+            {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% else %}<span class="pill secondary">N/A</span>{% endif %}
           </div>
 
           <div class="note" style="margin-top:4px;">
@@ -59,8 +59,7 @@
                   id: 'joinMarker{{ loop.index }}',
                   beforeDatasetsDraw(chart) {
                     if (!joinISO) return;
-                    const t = new Date(joinISO);
-                    const x = chart.scales.x.getPixelForValue(t);
+                    const x = chart.scales.x.getPixelForValue(new Date(joinISO));
                     if (!isFinite(x)) return;
                     const { top, bottom } = chart.chartArea;
                     const c = chart.ctx;
@@ -71,7 +70,6 @@
                     c.moveTo(x, top);
                     c.lineTo(x, bottom);
                     c.stroke();
-                    // arrow head at top
                     c.setLineDash([]);
                     c.beginPath();
                     c.moveTo(x, top);
@@ -85,22 +83,9 @@
 
                 new Chart(ctx, {
                   type: 'line',
-                  data: { 
-                    datasets: [{
-                      label: metricTag + ' (Millions)',
-                      data: points,
-                      parsing: { xAxisKey: 'x', yAxisKey: 'y' },
-                      pointRadius: 0,
-                      fill: false,
-                      tension: 0.1,
-                      spanGaps: true
-                    }]
-                  },
+                  data: { datasets: [{ label: metricTag + ' (Millions)', data: points, fill:false, tension:0.1, spanGaps:true }] },
                   options: {
-                    plugins: { 
-                      legend: { display: false },
-                      tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } }
-                    },
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } } },
                     scales: {
                       x: { type:'time', time:{ unit:'year', tooltipFormat:'MMM d, yyyy' }, title:{ display:true, text:'Year' }, ticks:{ maxRotation:0 } },
                       y: { beginAtZero:true, title:{ display:true, text:yLabel } }
@@ -132,26 +117,18 @@
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
-
-    // Build chartLogos without Python comprehensions
-    const chartLogos = {
-      {% for p in platforms %}
-        "{{ p.name|e }}": "{{ p.logo_url|default('', true) }}"{% if not loop.last %},{% endif %}
-      {% endfor %}
-    };
+    const labelToLogo = {{ chart_logos|tojson }};
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
-    // Preload logos for x-axis rendering
     const logoImgs = {};
-    Object.entries(chartLogos || {}).forEach(([label, url]) => {
-      if (!url) return;
+    Object.entries(labelToLogo || {}).forEach(([label, url]) => {
       const img = new Image();
       img.src = url;
       logoImgs[label] = img;
     });
 
-    // Draw dashed line BEFORE labels, so labels can paint over it
+    // dashed verified line
     const verifiedLine = {
       id: 'verifiedLine',
       beforeDatasetsDraw(chart) {
@@ -171,7 +148,26 @@
       }
     };
 
-    // Labels: draw LAST using afterDraw so they sit above dashed line
+    // draw logos below x tick labels
+    const xLogos = {
+      id: 'xLogos',
+      afterDraw(chart) {
+        const { ctx, scales: { x }, chartArea } = chart;
+        const bottom = chartArea.bottom;
+        const offset = 36; // extra room for logos
+        labels.forEach((label, i) => {
+          const img = logoImgs[label];
+          if (!img || !img.complete) return;
+          const xPos = x.getPixelForValue(i);
+          const size = 18;
+          ctx.save();
+          ctx.drawImage(img, xPos - size/2, bottom + offset - size, size, size);
+          ctx.restore();
+        });
+      }
+    };
+
+    // value pills (draw last so they sit above the dashed line)
     const barLabels = {
       id: 'barLabels',
       afterDraw(chart) {
@@ -216,33 +212,15 @@
       }
     };
 
-    const xLogos = {
-      id: 'xLogos',
-      afterDraw(chart) {
-        const { ctx, scales: { x }, chartArea } = chart;
-        const bottom = chartArea.bottom;
-        const offset = 28; // below tick labels
-        labels.forEach((label, i) => {
-          const img = logoImgs[label];
-          if (!img || !img.complete) return;
-          const xPos = x.getPixelForValue(i);
-          const size = 18;
-          ctx.save();
-          ctx.drawImage(img, xPos - size/2, bottom + offset, size, size);
-          ctx.restore();
-        });
-      }
-    };
-
     new Chart(ctxBar, {
       type: 'bar',
       data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       options: {
-        layout: { padding: { bottom: 70 } },
+        layout: { padding: { bottom: 110 } }, // space for tick labels + logos + x-title
         plugins: { legend: { display: false } },
         scales: { 
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
-          x: { title: { display: true, text: 'Platform' } }
+          x: { title: { display: true, text: 'Platform', padding: { top: 60 } } }
         }
       },
       plugins: [verifiedLine, xLogos, barLabels]
