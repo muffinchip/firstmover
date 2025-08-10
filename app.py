@@ -168,7 +168,6 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget
         try:
             probe_end = min(datetime(y, probe_start.month, probe_start.day, tzinfo=probe_start.tzinfo), end_dt)
         except ValueError:
-            # handle leap days etc. by clamping to 28th
             probe_end = min(datetime(y, probe_start.month, 28, tzinfo=probe_start.tzinfo), end_dt)
         exists, q = gmail_search_exists(svc, base_q, probe_start, probe_end)
         api_calls += 1
@@ -197,14 +196,14 @@ def gmail_find_earliest_hit_ts_bisect(svc, base_q, start_dt, end_dt, time_budget
     log.info(f"[gmail-scan] q='{base_q}' -> ts={ts} (calls={api_calls}, window={lo.date()}..{hi.date()}, elapsed={time.time()-t0:.2f}s)")
     return ts
 
-def gmail_oldest_from_queries_bounded_parallel(credentials, platform_key, queries, time_budget_s=1.2):
+def gmail_oldest_from_queries_bounded(credentials, platform_key, queries, time_budget_s=1.2):
     """Run query set in order; stop on first hit; respect per-platform budget."""
     svc = gmail_service(credentials)
     start_dt = platform_launch_dt(platform_key)
     end_dt = datetime.now(timezone.utc) + timedelta(days=1)
     t0 = time.time()
     best = None
-    for i, q in enumerate(queries):
+    for q in queries:
         remaining = time_budget_s - (time.time() - t0)
         if remaining <= 0:
             log.info(f"[gmail-scan] time budget exhausted for {platform_key}")
@@ -212,18 +211,17 @@ def gmail_oldest_from_queries_bounded_parallel(credentials, platform_key, querie
         ts = gmail_find_earliest_hit_ts_bisect(svc, q, start_dt, end_dt, time_budget_s=remaining, coarse_years=COARSE_STEP_YEARS)
         if ts is not None:
             best = ts
-            # stop after first successful query to save time
             break
     return best
 
-# ---------- Gmail first message (kept) ----------
+# ---------- Gmail first message (kept, faster) ----------
 def gmail_has_before(service, dt):
     q=f"before:{dt.strftime('%Y/%m/%d')}"
     return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
 
 def gmail_find_first_day(service):
     lo=datetime(2004,1,1,tzinfo=timezone.utc); hi=datetime.now(timezone.utc)+timedelta(days=1)
-    for _ in range(24):  # fewer steps
+    for _ in range(24):
         mid=lo+(hi-lo)/2
         if gmail_has_before(service, mid): hi=mid
         else: lo=mid
@@ -378,12 +376,11 @@ def get_google_credentials():
 def _search_platform(creds, key, queries, per_platform_budget, global_deadline):
     started = time.time()
     try:
-        # Trim per call to remaining global budget
         remain_global = max(0.0, global_deadline - started)
         budget = min(per_platform_budget, remain_global)
         if budget <= 0:
             return key, None, 0.0
-        ts = gmail_oldest_from_queries_bounded_parallel(creds, key, queries, time_budget_s=budget)
+        ts = gmail_oldest_from_queries_bounded(creds, key, queries, time_budget_s=budget)
         elapsed = time.time() - started
         log.info(f"[gmail-scan] {key} result={ts} elapsed={elapsed:.2f}s (budget={budget:.2f}s)")
         return key, ts, elapsed
@@ -420,12 +417,10 @@ def results():
             for fut in as_completed(futures):
                 k, ts, elapsed = fut.result()
                 if ts: gmail_hits[k]=ts
-                # Stop early if global budget exceeded
                 if time.time() > global_deadline:
                     log.info("[gmail-scan] global budget exhausted; skipping remaining lookups")
                     break
 
-    # Gmail baseline kept but with small budget
     gmail_baseline=None
     if creds and time.time() < global_deadline:
         try:
@@ -435,7 +430,6 @@ def results():
         except Exception as e:
             log.exception(f"[gmail-first] baseline failed: {e}")
 
-    # ------ Resolve and render (unchanged) ------
     def ms_to_iso(ms): 
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
     def ms_to_pretty(ms):
@@ -486,7 +480,7 @@ def results():
         chart_labels=labels, chart_values=values, chart_verified=verified_flags, chart_logos=logos_map
     )
 
-# ---- Card builder (unchanged) ----
+# ---- Card builder ----
 def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def parse_timeline(platform):
         tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
@@ -495,6 +489,19 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         ld = CURVES.get(platform,{}).get("launch_date")
         if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
         tl=parse_timeline(platform); return tl[0][0] if tl else None
+    def users_at(platform, when_ms):
+        tl=parse_timeline(platform)
+        if not tl: return None
+        when=datetime.fromtimestamp(when_ms/1000,tz=timezone):
+            pass
+        # Fallback: keep code concise here
+        return None
+
+def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
+    # Utilities scoped here for brevity
+    def parse_timeline(platform):
+        tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
+        return tl
     def users_at(platform, when_ms):
         tl=parse_timeline(platform)
         if not tl: return None
@@ -523,7 +530,6 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
     def before_pct(joined, today):
         if not joined or not today: return None
         return round(100*(1-(joined/today)),1)
-
     ld_ts = CURVES.get(key,{}).get("launch_date")
     ld = datetime.strptime(ld_ts,"%Y-%m-%d").replace(tzinfo=timezone.utc) if ld_ts else None
     if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
@@ -545,7 +551,6 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         except Exception: return dt.strftime("%B %d, %Y")
     def ms_to_iso(ms): 
         return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
-
     card={
         "name": PRETTY_NAMES.get(key, key.title()),
         "logo_url": LOGO_URLS.get(key,""),
