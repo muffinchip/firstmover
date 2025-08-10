@@ -87,19 +87,19 @@
                   type: 'line',
                   data: { 
                     datasets: [{
-                      label: metricTag + ' (Millions)', 
-                      data: points, 
+                      label: metricTag + ' (Millions)',
+                      data: points,
                       parsing: { xAxisKey: 'x', yAxisKey: 'y' },
                       pointRadius: 0,
                       fill: false,
                       tension: 0.1,
                       spanGaps: true
-                    }] 
+                    }]
                   },
                   options: {
                     plugins: { 
-                      legend: { display: false }, 
-                      tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } } 
+                      legend: { display: false },
+                      tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } }
                     },
                     scales: {
                       x: { type:'time', time:{ unit:'year', tooltipFormat:'MMM d, yyyy' }, title:{ display:true, text:'Year' }, ticks:{ maxRotation:0 } },
@@ -131,9 +131,14 @@
     const labels = {{ chart_labels|tojson }};
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
-    // If app.py didn't pass chart_logos, build a fallback mapping from platforms
-    const chartLogos = {{ (chart_logos if chart_logos is defined else dict((p.name, p.logo_url) for p in platforms)) | tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
+
+    // Build chartLogos without Python comprehensions
+    const chartLogos = {
+      {% for p in platforms %}
+        "{{ p.name|e }}": "{{ p.logo_url|default('', true) }}"{% if not loop.last %},{% endif %}
+      {% endfor %}
+    };
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 

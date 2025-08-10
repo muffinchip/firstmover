@@ -44,7 +44,7 @@
         {% for key, label in platforms %}
           <div class="platform-row">
             <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" onerror="this.style.display='none'"/>
-            <div class="name"><strong>{{ label }}</strong></div>
+            <div class="name">{{ label }}</div>
             <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
               <option value="">Month</option>
               {% for month in months %}<option value="{{ loop.index }}">{{ month }}</option>{% endfor %}
