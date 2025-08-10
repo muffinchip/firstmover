@@ -2,17 +2,17 @@
 {% block body %}
   <div class="card">
     <h1>FirstMover — Early Adopter Score</h1>
-    <p class="note">Use either (or both) options. We’ll only show a platform once we have a join date.</p>
+    <p class="note">Find out how early you joined the major platforms.</p>
   </div>
 
   <div class="card">
-    <h3>Option A — Sign in with Google</h3>
+    <h3>Option A — automatically find verified dates</h3>
     <p class="note">Grant <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails. On Google's screen, check <strong>“See your Gmail messages”</strong>.</p>
-    <a class="btn" id="googleBtn" href="#">Continue with Google</a>
+    <a class="btn" id="googleBtn" href="#">Continue with Google verification</a>
   </div>
 
   <div class="card">
-    <h3>Option B — Manual Month & Year</h3>
+    <h3>Option B — manually enter dates</h3>
     <p class="note">Enter when you joined. Fill in as many as you like.</p>
 
     <form id="manualForm" method="POST" action="{{ url_for('results') }}">
@@ -61,7 +61,7 @@
       </div>
 
       <div style="margin-top:10px;">
-        <button class="btn" type="submit">Show my results</button>
+        <button class="btn" type="submit">Continue without verification</button>
       </div>
     </form>
   </div>

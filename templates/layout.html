@@ -1,13 +1,13 @@
 <!doctype html>
-<html lang="en">
+<html lang='en'>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
   <title>FirstMover</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel='preconnect' href='https://fonts.googleapis.com'>
+  <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+  <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap' rel='stylesheet'>
+  <script src='https://cdn.jsdelivr.net/npm/chart.js'></script>
   <style>
     :root { --brand:#0ea5e9; --ink:#0f172a; --muted:#475569; --line:#e2e8f0; --bg:#f8fafc; }
     * { box-sizing:border-box; }
@@ -23,12 +23,12 @@
     label { display:block; font-size:14px; color:#111827; margin-bottom:4px; }
     select { height:34px; border:1px solid var(--line); border-radius:8px; padding:0 8px; width: 140px; }
     .platform-row { display:flex; align-items:center; gap:12px; margin-bottom:10px; }
-    .platform-row .name { width: 170px; font-weight:600; }
+    .platform-row .name { width: 220px; font-weight:600; }
     .platform-logo { width: 18px; height: 18px; object-fit: contain; }
     canvas { background:#fff; border:1px solid var(--line); border-radius:10px; }
   </style>
 </head>
-<body><div class="container">
+<body><div class='container'>
   {% block body %}{% endblock %}
 </div></body>
 </html>

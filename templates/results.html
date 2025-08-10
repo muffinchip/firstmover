@@ -108,7 +108,7 @@
       <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
     </div>
     <h3>Your place on the curve</h3>
-    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A 1st percentile is earlier than a 20th percentile.</p>
+    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
     <canvas id="barChart"></canvas>
   </div>
 
@@ -157,23 +157,30 @@
           const xPos = x.getPixelForValue(i);
           let yTop = y.getPixelForValue(val);
 
-          // If too close to dashed line, offset label for readability
-          if (lineY !== null && Math.abs(yTop - lineY) < 8) {
-            yTop = yTop - 12;
-          }
+          const nearLine = lineY !== null && Math.abs(yTop - lineY) < 8;
 
-          // Draw a white rounded-rect behind text for contrast
+          // Pill style: contrast when near dashed line
           const text = (verifiedFlags[i] ? '✓ ' : '') + val + 'th';
           ctx.save();
           ctx.font = '12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
           const metrics = ctx.measureText(text);
-          const paddingX = 6, paddingY = 3;
+          const paddingX = 7, paddingY = 4;
           const boxW = metrics.width + paddingX*2;
-          const boxH = 16;
+          const boxH = 18;
           const rectX = xPos - boxW/2;
-          const rectY = yTop - boxH - 2;
-          ctx.fillStyle = 'rgba(255,255,255,0.9)';
-          const r = 6;
+          const rectY = yTop - boxH - 4;
+
+          // background
+          ctx.fillStyle = nearLine ? '#0ea5e9' : 'rgba(255,255,255,0.95)';
+          // border + shadow for better separation
+          if (!nearLine) {
+            ctx.strokeStyle = 'rgba(2,6,23,0.1)';
+            ctx.lineWidth = 1;
+            ctx.shadowColor = 'rgba(2,6,23,0.08)';
+            ctx.shadowBlur = 4;
+            ctx.shadowOffsetY = 1;
+          }
+          const r = 8;
           ctx.beginPath();
           ctx.moveTo(rectX + r, rectY);
           ctx.lineTo(rectX + boxW - r, rectY);
@@ -186,12 +193,13 @@
           ctx.quadraticCurveTo(rectX, rectY, rectX + r, rectY);
           ctx.closePath();
           ctx.fill();
+          if (!nearLine) ctx.stroke();
 
           // Text
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillStyle = '#0f172a';
-          ctx.fillText(text, xPos, yTop - 4);
+          ctx.fillStyle = nearLine ? '#ffffff' : '#0f172a';
+          ctx.fillText(text, xPos, rectY + boxH - 5);
           ctx.restore();
         });
       }
@@ -200,15 +208,17 @@
     const xLogos = {
       id: 'xLogos',
       afterDraw(chart) {
-        const { ctx, scales: { x, y } } = chart;
-        const bottom = chart.chartArea.bottom;
+        const { ctx, scales: { x }, chartArea } = chart;
+        const bottom = chartArea.bottom;
+        // push logos clearly BELOW tick labels: add extra padding and draw farther down
+        const offset = 28; // below the tick labels
         labels.forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
           const xPos = x.getPixelForValue(i);
           const size = 18;
           ctx.save();
-          ctx.drawImage(img, xPos - size/2, bottom + 6, size, size);
+          ctx.drawImage(img, xPos - size/2, bottom + offset, size, size);
           ctx.restore();
         });
       }
@@ -218,7 +228,7 @@
       type: 'bar',
       data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       options: {
-        layout: { padding: { bottom: 30 } },
+        layout: { padding: { bottom: 70 } }, // space for tick labels + logos
         plugins: { 
           legend: { display: false },
           tooltip: { callbacks: { label: (ctx)=> (verifiedFlags[ctx.dataIndex] ? '✓ ' : '') + ctx.parsed.y + 'th percentile' } } 
