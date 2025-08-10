@@ -107,7 +107,7 @@
       <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
       <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
     </div>
-    <h3>Your place on the curve</h3>
+    <h3>You average in the top {{ score if score is not none else 'N/A' }}% of early adopters</h3>
     <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
     <canvas id="barChart"></canvas>
   </div>
@@ -156,10 +156,9 @@
         chart.data.datasets[0].data.forEach((val, i) => {
           const xPos = x.getPixelForValue(i);
           let yTop = y.getPixelForValue(val);
-
           const nearLine = lineY !== null && Math.abs(yTop - lineY) < 8;
 
-          // Pill style: contrast when near dashed line
+          // Pills: no borders/shadows; solid brand when near line, subtle white otherwise
           const text = (verifiedFlags[i] ? '✓ ' : '') + val + 'th';
           ctx.save();
           ctx.font = '12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
@@ -170,16 +169,8 @@
           const rectX = xPos - boxW/2;
           const rectY = yTop - boxH - 4;
 
-          // background
+          // background only
           ctx.fillStyle = nearLine ? '#0ea5e9' : 'rgba(255,255,255,0.95)';
-          // border + shadow for better separation
-          if (!nearLine) {
-            ctx.strokeStyle = 'rgba(2,6,23,0.1)';
-            ctx.lineWidth = 1;
-            ctx.shadowColor = 'rgba(2,6,23,0.08)';
-            ctx.shadowBlur = 4;
-            ctx.shadowOffsetY = 1;
-          }
           const r = 8;
           ctx.beginPath();
           ctx.moveTo(rectX + r, rectY);
@@ -193,7 +184,6 @@
           ctx.quadraticCurveTo(rectX, rectY, rectX + r, rectY);
           ctx.closePath();
           ctx.fill();
-          if (!nearLine) ctx.stroke();
 
           // Text
           ctx.textAlign = 'center';
@@ -210,8 +200,7 @@
       afterDraw(chart) {
         const { ctx, scales: { x }, chartArea } = chart;
         const bottom = chartArea.bottom;
-        // push logos clearly BELOW tick labels: add extra padding and draw farther down
-        const offset = 28; // below the tick labels
+        const offset = 28; // below tick labels
         labels.forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
@@ -224,11 +213,12 @@
       }
     };
 
+    // Put barLabels LAST so the label pills draw on top of the dashed line
     new Chart(ctxBar, {
       type: 'bar',
       data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       options: {
-        layout: { padding: { bottom: 70 } }, // space for tick labels + logos
+        layout: { padding: { bottom: 70 } },
         plugins: { 
           legend: { display: false },
           tooltip: { callbacks: { label: (ctx)=> (verifiedFlags[ctx.dataIndex] ? '✓ ' : '') + ctx.parsed.y + 'th percentile' } } 
@@ -238,7 +228,7 @@
           x: { title: { display: true, text: 'Platform' } }
         }
       },
-      plugins: [verifiedLine, barLabels, xLogos]
+      plugins: [verifiedLine, xLogos, barLabels]
     });
   </script>
 {% endblock %}
