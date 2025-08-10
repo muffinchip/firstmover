@@ -119,25 +119,13 @@ def month_year_to_ms(m, y):
 def abs_month_diff(a, b):
     return abs((a.year*12+a.month) - (b.year*12+b.month))
 def month_diff(a, b): return (b.year-a.year)*12 + (b.month-a.month)
-def months_to_human(m):
-    y, mm = divmod(m, 12)
-    return (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
 
 def gmail_service(credentials): return build("gmail","v1",credentials=credentials, cache_discovery=False)
-def gmail_oldest_for_query(credentials, q):
-    svc=gmail_service(credentials); page=None; last=None; pages=0
-    while True:
-        resp=svc.users().messages().list(userId="me",maxResults=500,pageToken=page,q=q).execute()
-        ids=resp.get("messages",[])
-        if ids: last=ids[-1]["id"]
-        page=resp.get("nextPageToken"); pages+=1
-        if not page or pages>50: break
-    if not last: return None
-    msg=svc.users().messages().get(userId="me",id=last,format="metadata").execute()
-    return int(msg.get("internalDate"))
+
 def gmail_has_before(service, dt):
     q=f"before:{dt.strftime('%Y/%m/%d')}"
     return bool(service.users().messages().list(userId='me', maxResults=1, q=q).execute().get("messages"))
+
 def gmail_find_first_day(service):
     lo=datetime(2004,1,1,tzinfo=timezone.utc); hi=datetime.now(timezone.utc)+timedelta(days=1)
     for _ in range(32):
@@ -145,6 +133,7 @@ def gmail_find_first_day(service):
         if gmail_has_before(service, mid): hi=mid
         else: lo=mid
     return (hi-timedelta(days=1)).date()
+
 def gmail_first_msg_ms(credentials):
     svc=gmail_service(credentials)
     d=gmail_find_first_day(svc)
@@ -161,27 +150,90 @@ def gmail_first_msg_ms(credentials):
     msg=svc.users().messages().get(userId='me',id=last,format="metadata").execute()
     return int(msg.get("internalDate"))
 
-WELCOME_QUERIES = {
-    "facebook":   'from:(facebookmail.com OR notify@facebookmail.com) subject:("Welcome to Facebook" OR "Just one more step" OR "Confirm your account") -subject:password -subject:reset',
-    "instagram":  'from:(mail.instagram.com OR security@mail.instagram.com) subject:(Welcome OR "Confirm your email") -subject:password -subject:reset',
-    "linkedin":   'from:(linkedin.com) subject:(Welcome OR Confirm) -subject:password -subject:reset',
-    "dropbox":    'from:(no-reply@dropbox.com) subject:(Welcome OR Confirm) -subject:password -subject:reset',
-    "openai":     'from:(noreply@openai.com OR team@openai.com) subject:(Welcome OR Confirm) -subject:password -subject:reset',
-    "spotify":    'from:(no-reply@spotify.com) subject:(Welcome OR "Welcome to Spotify" OR Confirm) -subject:password -subject:reset',
-    "twitter":    'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) subject:(Welcome OR Confirm) -subject:password -subject:reset',
-    "reddit":     'from:(noreply@reddit.com) subject:(welcome OR confirm) -subject:password -subject:reset',
-    "amazonprime": 'from:(no-reply@amazon.com OR prime@amazon.com) subject:("Welcome to Amazon Prime" OR Confirm) -subject:password -subject:reset'
+# Broadened, multi-try queries per platform (most-specific first)
+WELCOME_QUERY_SETS = {
+    "reddit": [
+        'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) subject:(welcome OR verify OR confirm) -subject:password -subject:reset',
+        'from:(noreply@reddit.com OR do-not-reply@reddit.com OR noreply@redditmail.com) -subject:password -subject:reset',
+    ],
+    "amazonprime": [
+        'from:(no-reply@amazon.com OR prime@amazon.com OR digital-no-reply@amazon.com OR prime-enroll@amazon.com) subject:(prime OR welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(no-reply@amazon.com OR prime@amazon.com OR digital-no-reply@amazon.com OR prime-enroll@amazon.com) -subject:password -subject:reset',
+    ],
+    "dropbox": [
+        'from:(no-reply@dropbox.com OR dropbox@mail.dropbox.com OR no-reply@dropboxmail.com) subject:(welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(no-reply@dropbox.com OR dropbox@mail.dropbox.com OR no-reply@dropboxmail.com) -subject:password -subject:reset',
+    ],
+    "openai": [
+        'from:(noreply@openai.com OR team@openai.com OR no-reply@accounts.openai.com OR noreply@accounts.openai.com OR no-reply@chat.openai.com) subject:(welcome OR confirm OR verify OR "ChatGPT") -subject:password -subject:reset',
+        'from:(noreply@openai.com OR team@openai.com OR no-reply@accounts.openai.com OR noreply@accounts.openai.com OR no-reply@chat.openai.com) -subject:password -subject:reset',
+    ],
+    "facebook": [
+        'from:(facebookmail.com OR notify@facebookmail.com) subject:(welcome OR confirm OR verify OR "Just one more step") -subject:password -subject:reset',
+        'from:(facebookmail.com OR notify@facebookmail.com) -subject:password -subject:reset',
+    ],
+    "instagram": [
+        'from:(mail.instagram.com OR security@mail.instagram.com) subject:(welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(mail.instagram.com OR security@mail.instagram.com) -subject:password -subject:reset',
+    ],
+    "linkedin": [
+        'from:(linkedin.com) subject:(welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(linkedin.com) -subject:password -subject:reset',
+    ],
+    "spotify": [
+        'from:(no-reply@spotify.com) subject:(welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(no-reply@spotify.com) -subject:password -subject:reset',
+    ],
+    "twitter": [
+        'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) subject:(welcome OR confirm OR verify) -subject:password -subject:reset',
+        'from:(twitter.com OR verify@twitter.com OR info@twitter.com OR hello@twitter.com) -subject:password -subject:reset',
+    ],
 }
+
+def gmail_oldest_for_query(credentials, q):
+    """Return ms timestamp of the oldest hit for a single Gmail search query."""
+    svc = gmail_service(credentials)
+    page = None
+    last = None
+    pages = 0
+    while True:
+        resp = svc.users().messages().list(userId="me", maxResults=500, pageToken=page, q=q).execute()
+        ids = resp.get("messages", [])
+        if ids:
+            last = ids[-1]["id"]
+        page = resp.get("nextPageToken")
+        pages += 1
+        if not page or pages > 50:
+            break
+    if not last:
+        return None
+    msg = svc.users().messages().get(userId="me", id=last, format="metadata").execute()
+    return int(msg.get("internalDate"))
+
+def gmail_oldest_from_queries(credentials, queries):
+    """Try multiple queries (most-specific first). Return earliest timestamp found (ms)."""
+    best_ts = None
+    for q in queries:
+        try:
+            ts = gmail_oldest_for_query(credentials, q)
+        except Exception:
+            ts = None
+        if ts is not None:
+            if best_ts is None or ts < best_ts:
+                best_ts = ts
+    return best_ts
 
 def parse_timeline(platform):
     tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
     return tl
+
 def launch_date(platform):
     ld = CURVES.get(platform,{}).get("launch_date")
     if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
     tl=parse_timeline(platform); return tl[0][0] if tl else None
+
 def users_at(platform, when_ms):
-    tl=parse_timeline(platform); 
+    tl=parse_timeline(platform)
     if not tl: return None
     when=datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
     if when<=tl[0][0]: return tl[0][1]
@@ -192,8 +244,10 @@ def users_at(platform, when_ms):
             frac=(when-d0).total_seconds()/span if span else 0
             return round(u0 + frac*(u1-u0))
     return tl[-1][1]
+
 def users_today(platform):
     tl=parse_timeline(platform); return tl[-1][1] if tl else None
+
 def timeline_series(platform):
     tl=parse_timeline(platform)
     if not tl: return {"points_m":[]}
@@ -203,9 +257,10 @@ def timeline_series(platform):
         pts.append({"x": today.strftime("%Y-%m-%d"), "y": round(tl[-1][1]/1_000_000,3)})
     return {"points_m": pts}
 
-def early_pct(joined, today): 
+def early_pct(joined, today):
     if not joined or not today: return None
     return round(100*(joined/today),1)
+
 def before_pct(joined, today):
     if not joined or not today: return None
     return round(100*(1-(joined/today)),1)
@@ -225,7 +280,10 @@ def save_manual():
         m = data.get(f"{k}_join_month")
         y = data.get(f"{k}_join_year")
         if m and y:
-            ms = month_year_to_ms(m, y)
+            try:
+                ms = int(datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()*1000)
+            except Exception:
+                ms = None
             if ms: manual[k] = ms
     session["manual_entries"] = manual
     return jsonify({"ok": True, "count": len(manual)})
@@ -271,17 +329,24 @@ def results():
         for k in platform_keys:
             m=request.form.get(f"{k}_join_month"); y=request.form.get(f"{k}_join_year")
             if m and y:
-                ms=month_year_to_ms(m,y)
+                try:
+                    ms=int(datetime(int(y),int(m),1,tzinfo=timezone.utc).timestamp()*1000)
+                except Exception:
+                    ms=None
                 if ms: manual[k]=ms
         session["manual_entries"]=manual
 
     gmail_hits={}
     creds=get_google_credentials()
     if creds:
-        for k,q in WELCOME_QUERIES.items():
-            if k not in platform_keys: continue
-            try: ts=gmail_oldest_for_query(creds,q)
-            except Exception: ts=None
+        # Try multiple queries per platform; pick earliest
+        for k, query_list in WELCOME_QUERY_SETS.items():
+            if k not in platform_keys: 
+                continue
+            try:
+                ts = gmail_oldest_from_queries(creds, query_list)
+            except Exception:
+                ts = None
             if ts: gmail_hits[k]=ts
 
     gmail_baseline=None
@@ -289,13 +354,28 @@ def results():
         try: gmail_baseline=gmail_first_msg_ms(creds)
         except Exception as e: print("gmail baseline failed:", e)
 
+    def ms_to_iso(ms): 
+        return datetime.fromtimestamp(ms/1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+    def ms_to_pretty(ms):
+        dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
+        try: return dt.strftime("%B %-d, %Y")
+        except Exception: return dt.strftime("%B %d, %Y")
+
+    def launch_date(platform):
+        ld = CURVES.get(platform,{}).get("launch_date")
+        if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
+        tl=parse_timeline(platform); return tl[0][0] if tl else None
+
+    def month_diff(a, b): return (b.year-a.year)*12 + (b.month-a.month)
+
     resolved={}
     for k in platform_keys:
         m_ms=manual.get(k); g_ms=gmail_hits.get(k)
         if m_ms and g_ms:
             m_d=datetime.fromtimestamp(m_ms/1000,tz=timezone.utc).date()
             g_d=datetime.fromtimestamp(g_ms/1000,tz=timezone.utc).date()
-            if abs_month_diff(m_d,g_d) < 12:
+            if abs((m_d.year*12+m_d.month)-(g_d.year*12+g_d.month)) < 12:
                 resolved[k]={"date_ms":g_ms,"verified":True,"email_hint_ms":None}
             else:
                 resolved[k]={"date_ms":m_ms,"verified":False,"email_hint_ms":g_ms}
@@ -332,6 +412,42 @@ def results():
     )
 
 def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
+    def parse_timeline(platform):
+        tl = sorted([(datetime.strptime(d,"%Y-%m-%d").replace(tzinfo=timezone.utc), int(u)) for d,u in CURVES.get(platform,{}).get("timeline",[])], key=lambda x:x[0])
+        return tl
+    def launch_date(platform):
+        ld = CURVES.get(platform,{}).get("launch_date")
+        if ld: return datetime.strptime(ld,"%Y-%m-%d").replace(tzinfo=timezone.utc)
+        tl=parse_timeline(platform); return tl[0][0] if tl else None
+    def users_at(platform, when_ms):
+        tl=parse_timeline(platform)
+        if not tl: return None
+        when=datetime.fromtimestamp(when_ms/1000, tz=timezone.utc)
+        if when<=tl[0][0]: return tl[0][1]
+        if when>=tl[-1][0]: return tl[-1][1]
+        for (d0,u0),(d1,u1) in zip(tl, tl[1:]):
+            if d0<=when<=d1:
+                span=(d1-d0).total_seconds()
+                frac=(when-d0).total_seconds()/span if span else 0
+                return round(u0 + frac*(u1-u0))
+        return tl[-1][1]
+    def users_today(platform):
+        tl=parse_timeline(platform); return tl[-1][1] if tl else None
+    def timeline_series(platform):
+        tl=parse_timeline(platform)
+        if not tl: return {"points_m":[]}
+        pts=[{"x":d.strftime("%Y-%m-%d"), "y": round(u/1_000_000,3)} for d,u in tl]
+        today=datetime.now(timezone.utc).date()
+        if tl[-1][0].date()<today:
+            pts.append({"x": today.strftime("%Y-%m-%d"), "y": round(tl[-1][1]/1_000_000,3)})
+        return {"points_m": pts}
+    def early_pct(joined, today):
+        if not joined or not today: return None
+        return round(100*(joined/today),1)
+    def before_pct(joined, today):
+        if not joined or not today: return None
+        return round(100*(1-(joined/today)),1)
+
     ld=launch_date(key)
     if ld and datetime.fromtimestamp(ts/1000,tz=timezone.utc) < ld:
         ts=int(ld.timestamp()*1000)
@@ -343,7 +459,7 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         if verified: v_pcts.append(pct)
     points=timeline_series(key)
     joined_dt=datetime.fromtimestamp(ts/1000,tz=timezone.utc)
-    months_after=month_diff(ld.date(), joined_dt.date()) if ld else 0
+    months_after=(joined_dt.year-ld.year)*12 + (joined_dt.month-ld.month) if ld else 0
     y, mm = divmod(months_after, 12)
     human = (f"{y} year{'s' if y!=1 else ''} " if y else "") + (f"{mm} month{'s' if mm!=1 else ''}" if mm else "0 months")
     card={
@@ -361,6 +477,10 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
         "verified": bool(verified)
     }
     if email_hint_ms:
+        def ms_to_pretty(ms):
+            dt = datetime.fromtimestamp(ms/1000, tz=timezone.utc)
+            try: return dt.strftime("%B %-d, %Y")
+            except Exception: return dt.strftime("%B %d, %Y")
         card["email_hint"] = f"Also found in email: {ms_to_pretty(email_hint_ms)}"
     platforms.append(card)
 
