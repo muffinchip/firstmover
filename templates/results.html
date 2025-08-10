@@ -17,7 +17,7 @@
 
     {% for p in platforms %}
       <div class="platform-row" style="align-items:flex-start;">
-        {% if p.logo_url %}<img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" />{% endif %}
+        {% if p.logo_url %}<img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>{% endif %}
         <div style="flex:1;">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
             <div style="display:flex;align-items:center;gap:8px;">
@@ -108,6 +108,7 @@
       <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
     </div>
     <h3>Your place on the curve</h3>
+    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A 1st percentile is earlier than a 20th percentile.</p>
     <canvas id="barChart"></canvas>
   </div>
 
@@ -116,8 +117,17 @@
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
+    const labelToLogo = {{ chart_logos|tojson }};
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
+
+    // Preload logos for x-axis rendering
+    const logoImgs = {};
+    Object.entries(labelToLogo || {}).forEach(([label, url]) => {
+      const img = new Image();
+      img.src = url;
+      logoImgs[label] = img;
+    });
 
     const verifiedLine = {
       id: 'verifiedLine',
@@ -142,15 +152,63 @@
       id: 'barLabels',
       afterDatasetsDraw(chart) {
         const { ctx, scales: { x, y } } = chart;
+        const lineY = (verifiedComposite === null || verifiedComposite === undefined) ? null : y.getPixelForValue(verifiedComposite);
         chart.data.datasets[0].data.forEach((val, i) => {
           const xPos = x.getPixelForValue(i);
-          const yTop = y.getPixelForValue(val);
-          const isVerified = verifiedFlags[i];
+          let yTop = y.getPixelForValue(val);
+
+          // If too close to dashed line, offset label for readability
+          if (lineY !== null && Math.abs(yTop - lineY) < 8) {
+            yTop = yTop - 12;
+          }
+
+          // Draw a white rounded-rect behind text for contrast
+          const text = (verifiedFlags[i] ? '✓ ' : '') + val + 'th';
           ctx.save();
+          ctx.font = '12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+          const metrics = ctx.measureText(text);
+          const paddingX = 6, paddingY = 3;
+          const boxW = metrics.width + paddingX*2;
+          const boxH = 16;
+          const rectX = xPos - boxW/2;
+          const rectY = yTop - boxH - 2;
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          const r = 6;
+          ctx.beginPath();
+          ctx.moveTo(rectX + r, rectY);
+          ctx.lineTo(rectX + boxW - r, rectY);
+          ctx.quadraticCurveTo(rectX + boxW, rectY, rectX + boxW, rectY + r);
+          ctx.lineTo(rectX + boxW, rectY + boxH - r);
+          ctx.quadraticCurveTo(rectX + boxW, rectY + boxH, rectX + boxW - r, rectY + boxH);
+          ctx.lineTo(rectX + r, rectY + boxH);
+          ctx.quadraticCurveTo(rectX, rectY + boxH, rectX, rectY + boxH - r);
+          ctx.lineTo(rectX, rectY + r);
+          ctx.quadraticCurveTo(rectX, rectY, rectX + r, rectY);
+          ctx.closePath();
+          ctx.fill();
+
+          // Text
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.font = '12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-          ctx.fillText((isVerified ? '✓ ' : '') + val + 'th', xPos, yTop - 6);
+          ctx.fillStyle = '#0f172a';
+          ctx.fillText(text, xPos, yTop - 4);
+          ctx.restore();
+        });
+      }
+    };
+
+    const xLogos = {
+      id: 'xLogos',
+      afterDraw(chart) {
+        const { ctx, scales: { x, y } } = chart;
+        const bottom = chart.chartArea.bottom;
+        labels.forEach((label, i) => {
+          const img = logoImgs[label];
+          if (!img || !img.complete) return;
+          const xPos = x.getPixelForValue(i);
+          const size = 18;
+          ctx.save();
+          ctx.drawImage(img, xPos - size/2, bottom + 6, size, size);
           ctx.restore();
         });
       }
@@ -160,10 +218,17 @@
       type: 'bar',
       data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       options: {
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> (verifiedFlags[ctx.dataIndex] ? '✓ ' : '') + ctx.parsed.y + 'th percentile' } } },
-        scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } }, x: { title: { display: true, text: 'Platform' } } }
+        layout: { padding: { bottom: 30 } },
+        plugins: { 
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx)=> (verifiedFlags[ctx.dataIndex] ? '✓ ' : '') + ctx.parsed.y + 'th percentile' } } 
+        },
+        scales: { 
+          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
+          x: { title: { display: true, text: 'Platform' } }
+        }
       },
-      plugins: [verifiedLine, barLabels]
+      plugins: [verifiedLine, barLabels, xLogos]
     });
   </script>
 {% endblock %}

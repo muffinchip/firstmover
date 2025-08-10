@@ -96,8 +96,8 @@ LOGO_URLS = {
     "dropbox":"https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg",
     "openai":"https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg",
     "spotify":"https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg",
-    "reddit":"https://upload.wikimedia.org/wikipedia/en/5/58/Reddit_logo_new.svg",
-    "amazonprime":"https://upload.wikimedia.org/wikipedia/commons/f/f1/Prime_logo.png"
+    "reddit":"https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg",
+    "amazonprime":"https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg"
 }
 
 def token_has_gmail_scope(token):
@@ -212,10 +212,23 @@ def before_pct(joined, today):
 
 @app.route("/")
 def index():
-    session.pop("manual_entries", None)
     months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
     years = list(range(datetime.now(timezone.utc).year, 1999, -1))
     return render_template("index.html", months=months, years=years)
+
+@app.post("/save_manual")
+def save_manual():
+    data = request.get_json(silent=True) or {}
+    platform_keys=["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
+    manual = {}
+    for k in platform_keys:
+        m = data.get(f"{k}_join_month")
+        y = data.get(f"{k}_join_year")
+        if m and y:
+            ms = month_year_to_ms(m, y)
+            if ms: manual[k] = ms
+    session["manual_entries"] = manual
+    return jsonify({"ok": True, "count": len(manual)})
 
 @app.route("/login/google")
 def login_google():
@@ -252,7 +265,8 @@ def get_google_credentials():
 @app.route("/results", methods=["GET","POST"])
 def results():
     platform_keys=["facebook","twitter","instagram","linkedin","dropbox","openai","spotify","reddit","amazonprime"]
-    manual={}
+    manual = session.get("manual_entries", {}) if request.method=="GET" else {}
+
     if request.method=="POST":
         for k in platform_keys:
             m=request.form.get(f"{k}_join_month"); y=request.form.get(f"{k}_join_year")
@@ -260,8 +274,6 @@ def results():
                 ms=month_year_to_ms(m,y)
                 if ms: manual[k]=ms
         session["manual_entries"]=manual
-    else:
-        manual=session.get("manual_entries",{}) or {}
 
     gmail_hits={}
     creds=get_google_credentials()
@@ -354,4 +366,3 @@ def add_card(platforms, all_pcts, v_pcts, key, ts, verified, email_hint_ms):
 
 @app.route("/healthz")
 def healthz(): return jsonify({"ok":True})
-

@@ -8,14 +8,14 @@
   <div class="card">
     <h3>Option A — Sign in with Google</h3>
     <p class="note">Grant <strong>Gmail Read-Only</strong> so we can find welcome/confirmation emails. On Google's screen, check <strong>“See your Gmail messages”</strong>.</p>
-    <a class="btn" href="{{ url_for('login_google') }}">Continue with Google</a>
+    <a class="btn" id="googleBtn" href="#">Continue with Google</a>
   </div>
 
   <div class="card">
     <h3>Option B — Manual Month & Year</h3>
     <p class="note">Enter when you joined. Fill in as many as you like.</p>
 
-    <form method="POST" action="{{ url_for('results') }}">
+    <form id="manualForm" method="POST" action="{{ url_for('results') }}">
       {% set platforms = [
         ('facebook','Facebook'),
         ('twitter','Twitter / X'),
@@ -36,8 +36,8 @@
         'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
         'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
         'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
-        'reddit': 'https://upload.wikimedia.org/wikipedia/en/5/58/Reddit_logo_new.svg',
-        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/f/f1/Prime_logo.png'
+        'reddit': 'https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg',
+        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg'
       } %}
 
       {% set months = months %}
@@ -46,7 +46,7 @@
       <div>
         {% for key, label in platforms %}
           <div class="platform-row">
-            <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" />
+            <img class="platform-logo" src="{{ logos[key] }}" alt="{{ label }} logo" onerror="this.style.display='none'"/>
             <div class="name">{{ label }}</div>
             <select name="{{ key }}_join_month" aria-label="{{ label }} join month">
               <option value="">Month</option>
@@ -65,4 +65,25 @@
       </div>
     </form>
   </div>
+
+  <script>
+    // Save manual form state before Google redirect so those dates are honored
+    const googleBtn = document.getElementById('googleBtn');
+    googleBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const form = document.getElementById('manualForm');
+      const data = {};
+      new FormData(form).forEach((v, k) => data[k] = v);
+      try {
+        await fetch('{{ url_for("save_manual") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+      } catch (err) {
+        console.warn('Save manual failed (continuing anyway)', err);
+      }
+      window.location.href = '{{ url_for("login_google") }}';
+    });
+  </script>
 {% endblock %}
