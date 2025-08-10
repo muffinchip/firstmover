@@ -1,3 +1,4 @@
+@ -1,15 +1,24 @@
 {% extends "layout.html" %}
 {% block body %}
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
@@ -5,9 +6,12 @@
 
   <div class="card">
     <a href="{{ url_for('index') }}" class="btn secondary">← Start over</a>
+    <h2>Your Early Adopter Results</h2>
 
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-top:8px;">
     <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
       <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
+      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
       <div>
         <strong>Verified Composite Percentile:</strong>
         {{ score_verified if score_verified is not none else 'N/A' }}
@@ -22,10 +26,15 @@
   </div>
 
   <div class="card">
-    <h3>Platforms</h3>
+@ -17,15 +26,20 @@
 
     {% for p in platforms %}
       <div class="platform-row" style="align-items:flex-start;">
+        {% if p.logo_url %}<img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>{% endif %}
+        <div style="flex:1;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span>{{ p.name }}</span>
         {% if p.logo_url %}
           <img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>
         {% endif %}
@@ -37,50 +46,29 @@
               {% if p.metric_tag %}<span class="pill secondary">{{ p.metric_tag }}</span>{% endif %}
               {% if p.verified %}<span class="pill">✓ verified</span>{% else %}<span class="pill secondary">self-report</span>{% endif %}
             </div>
+            {% if p.percentile is not none %}<span class="pill">{{ p.percentile }}th percentile</span>{% else %}<span class="pill secondary">N/A</span>{% endif %}
             {% if p.percentile is not none %}
               <span class="pill">{{ p.percentile }}th percentile</span>
             {% endif %}
           </div>
 
           <div class="note" style="margin-top:4px;">
-            Joined: {{ p.joined }}
-            {% if p.email_hint %}<span style="margin-left:8px;">· <em>{{ p.email_hint }}</em></span>{% endif %}
-          </div>
-
-          {% if p.joined_users and p.today_users %}
-            <p style="margin:8px 0 0 0;">
-              You joined {{ p.name }} <strong>{{ p.narrative_after }}</strong> after launch,
-              before <strong>{{ p.narrative_percent }}%</strong> of current users.
-              When you joined {{ p.name }} it had approximately
-              <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
-              <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
-            </p>
-          {% endif %}
-
-          {% if p.chart and p.chart['points_m'] %}
-            <div style="margin-top:10px; width:100%;">
-              <canvas id="curve-{{ loop.index }}"></canvas>
-            </div>
-            <script>
-              (function(){
-                const points = {{ p.chart['points_m']|tojson }};
-                const joinISO = "{{ p.join_iso or '' }}";
-                const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
+@ -55,9 +69,13 @@
                 const metricTag = "{{ p.metric_tag or 'Users' }}";
                 const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                // Proportional y-axis (110% headroom)
-                const maxY = points.reduce((m, pt) => Math.max(m, Number(pt.y) || 0), 0) || 0;
-                const hardMax = maxY ? Math.ceil(maxY * 1.10) : undefined;
+                // Determine proportional y-axis max (10% headroom)
+                const maxY = points.reduce((m, pt) => Math.max(m, pt.y || 0), 0) || 0;
+                const niceMax = maxY ? Math.ceil(maxY * 1.1) : undefined;
 
                 const joinMarkerPlugin = {
                   id: 'joinMarker{{ loop.index }}',
+                  beforeDatasetsDraw(chart) {
                   afterDatasetsDraw(chart) {
                     if (!joinISO) return;
                     const x = chart.scales.x.getPixelForValue(new Date(joinISO));
                     if (!isFinite(x)) return;
-                    const { top, bottom } = chart.chartArea;
-                    const c = chart.ctx;
+@ -66,11 +84,14 @@
                     c.save();
                     c.setLineDash([6,4]);
                     c.lineWidth = 1.5;
@@ -95,29 +83,24 @@
                     c.beginPath();
                     c.moveTo(x, top);
                     c.lineTo(x - 6, top + 12);
-                    c.lineTo(x + 6, top + 12);
-                    c.closePath();
-                    c.fill();
-                    c.restore();
-                  }
-                };
+@ -83,12 +104,38 @@
 
                 new Chart(ctx, {
                   type: 'line',
+                  data: { datasets: [{ label: metricTag + ' (Millions)', data: points, fill:false, tension:0.1, spanGaps:true }] },
                   data: {
                     datasets: [{
                       label: metricTag + ' (Millions)',
                       data: points,
-                      tension: 0.15,
-                      borderWidth: 2.25,
-                      pointRadius: 2.5,
                       fill: false,
-                      spanGaps: true
+                      tension: 0.15,
+                      spanGaps: true,
+                      borderWidth: 2.25,
+                      pointRadius: 2.5
                     }]
                   },
                   options: {
-                    maintainAspectRatio: false,
-                    aspectRatio: 2.2,
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx)=> `${metricTag}: ${Intl.NumberFormat().format(ctx.parsed.y)}M` } } },
                     plugins: {
                       legend: { display: false },
                       tooltip: {
@@ -127,6 +110,8 @@
                       }
                     },
                     scales: {
+                      x: { type:'time', time:{ unit:'year', tooltipFormat:'MMM d, yyyy' }, title:{ display:true, text:'Year' }, ticks:{ maxRotation:0 } },
+                      y: { beginAtZero:true, title:{ display:true, text:yLabel } }
                       x: {
                         type: 'time',
                         time: { unit: 'year', tooltipFormat: 'MMM d, yyyy' },
@@ -135,15 +120,13 @@
                       },
                       y: {
                         beginAtZero: true,
-                        max: hardMax,   // hard cap so it’s proportional
+                        suggestedMax: niceMax,
                         title: { display: true, text: yLabel }
                       }
                     }
                   },
                   plugins: [joinMarkerPlugin]
-                });
-              })();
-            </script>
+@ -98,37 +145,40 @@
           {% endif %}
         </div>
       </div>
@@ -153,14 +136,25 @@
     {% endfor %}
   </div>
 
+  <div class="card">
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+      <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
+      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
+    </div>
+    <h3>You average in the top {{ score if score is not none else 'N/A' }}% of early adopters</h3>
+    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
+    <canvas id="barChart"></canvas>
+  </div>
+
   <script>
     // ---- Bar chart (percentiles) ----
     const labels = {{ chart_labels|tojson }};
     const dataVals = {{ chart_values|tojson }};
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
+    const labelToLogo = {{ chart_logos|tojson }};
 
-    // label -> logo URL from backend cards
+    // Map label -> logo URL (provided by backend for each platform)
     const labelToLogo = {};
     {% for p in platforms %}
       {% if p.logo_url %}
@@ -170,25 +164,24 @@
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
-    // preload logos
+    // Load logos
     const logoImgs = {};
+    Object.entries(labelToLogo || {}).forEach(([label, url]) => {
     labels.forEach(l => {
       const url = labelToLogo[l];
       if (!url) return;
       const img = new Image();
       img.src = url;
+      logoImgs[label] = img;
       logoImgs[l] = img;
     });
 
-    // 1) dashed verified composite line (before datasets)
+    // dashed verified line
+    // Draw the horizontal verified dashed line BEFORE datasets so our labels can sit on top.
     const verifiedLine = {
       id: 'verifiedLine',
       beforeDatasetsDraw(chart) {
-        if (verifiedComposite === null || verifiedComposite === undefined) return;
-        const y = chart.scales.y.getPixelForValue(verifiedComposite);
-        if (!isFinite(y)) return;
-        const { left, right } = chart.chartArea;
-        const c = chart.ctx;
+@ -140,6 +190,7 @@
         c.save();
         c.setLineDash([6,4]);
         c.lineWidth = 1.5;
@@ -196,96 +189,120 @@
         c.beginPath();
         c.moveTo(left, y);
         c.lineTo(right, y);
-        c.stroke();
-        c.restore();
+@ -148,48 +199,30 @@
       }
     };
 
-    // 2) percentile pills (draw last so they’re always on top)
+    // draw logos below x tick labels
+    const xLogos = {
+      id: 'xLogos',
+      afterDraw(chart) {
+        const { ctx, scales: { x }, chartArea } = chart;
+        const bottom = chartArea.bottom;
+        const offset = 36; // extra room for logos
+        labels.forEach((label, i) => {
+          const img = logoImgs[label];
+          if (!img || !img.complete) return;
+          const xPos = x.getPixelForValue(i);
+          const size = 18;
+          ctx.save();
+          ctx.drawImage(img, xPos - size/2, bottom + offset - size, size, size);
+          ctx.restore();
+        });
+      }
+    };
+
+    // value pills (draw last so they sit above the dashed line)
+    // Draw value "pills" AFTER datasets so they are always on top of bars and dashed line
     const barLabels = {
       id: 'barLabels',
       afterDraw(chart) {
-        const { ctx, chartArea: { top, bottom, left, right }, scales: { x, y }, data } = chart;
+      afterDatasetsDraw(chart) {
+        const { ctx, scales: { x, y }, data } = chart;
         const vals = data.datasets[0].data;
         vals.forEach((val, i) => {
+          if (val === null || val === undefined) return;
           if (val == null) return;
           const xPos = x.getPixelForValue(i);
           const yTop = y.getPixelForValue(val);
 
           const text = (verifiedFlags[i] ? '✓ ' : '') + val + 'th';
           ctx.save();
+          ctx.font = '12px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
           ctx.font = '600 13px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
-
           const metrics = ctx.measureText(text);
+          const paddingX = 7, paddingY = 4;
           const paddingX = 8, paddingY = 5;
-          const boxW = Math.ceil(metrics.width + paddingX*2);
+          const boxW = metrics.width + paddingX*2;
+          const boxH = 18;
+          const rectX = xPos - boxW/2;
+          const rectY = yTop - boxH - 4;
           const boxH = 20;
+          const rectX = Math.round(xPos - boxW/2);
+          const rectY = Math.round(yTop - boxH - 6);
 
-          let rectX = Math.round(xPos - boxW/2);
-          let rectY = Math.round(yTop - boxH - 6);
-
-          // keep inside the plotting area
-          rectX = Math.max(left + 2, Math.min(rectX, right - boxW - 2));
-          rectY = Math.max(top + 2, Math.min(rectY, bottom - boxH - 2));
-
-          // pill
+          // white pill (no border/shadow)
           ctx.fillStyle = 'rgba(255,255,255,0.98)';
+          const r = 8;
           const r = 10;
           ctx.beginPath();
           ctx.moveTo(rectX + r, rectY);
           ctx.lineTo(rectX + boxW - r, rectY);
-          ctx.quadraticCurveTo(rectX + boxW, rectY, rectX + boxW, rectY + r);
-          ctx.lineTo(rectX + boxW, rectY + boxH - r);
-          ctx.quadraticCurveTo(rectX + boxW, rectY + boxH, rectX + boxW - r, rectY + boxH);
-          ctx.lineTo(rectX + r, rectY + boxH);
-          ctx.quadraticCurveTo(rectX, rectY + boxH, rectX, rectY + boxH - r);
-          ctx.lineTo(rectX, rectY + r);
-          ctx.quadraticCurveTo(rectX, rectY, rectX + r, rectY);
-          ctx.closePath();
+@ -204,9 +237,28 @@
           ctx.fill();
 
           ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
           ctx.textBaseline = 'middle';
           ctx.fillStyle = '#0f172a';
-          ctx.fillText(text, Math.round(rectX + boxW/2), Math.round(rectY + boxH/2));
+          ctx.fillText(text, xPos, rectY + boxH - 5);
+          ctx.fillText(text, Math.round(xPos), Math.round(rectY + boxH/2));
           ctx.restore();
         });
       }
     };
 
-    // 3) logos below tick labels (extra bottom padding)
+    // Draw logos under tick labels with extra bottom padding
     const xLogos = {
       id: 'xLogos',
       afterDraw(chart) {
         const { ctx, scales: { x }, chartArea } = chart;
         const bottom = chartArea.bottom;
-        const offset = 44; // further below tick labels
+        const offset = 28; // space below tick labels
         labels.forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
           const xPos = x.getPixelForValue(i);
-          const size = 22;
+          const size = 20;
           ctx.save();
           ctx.drawImage(img, Math.round(xPos - size/2), Math.round(bottom + offset), size, size);
           ctx.restore();
         });
       }
-    };
+@ -214,16 +266,34 @@
 
     new Chart(ctxBar, {
       type: 'bar',
+      data: { labels, datasets: [{ label: 'Early-adopter Percentile (lower is earlier)', data: dataVals }] },
       data: {
         labels,
         datasets: [{
           label: 'Early-adopter Percentile (lower is earlier)',
           data: dataVals,
           borderWidth: 0,
-          backgroundColor: 'rgba(37, 99, 235, 0.35)'
+          backgroundColor: 'rgba(37, 99, 235, 0.35)' // default Chart.js blue w/ transparency
         }]
       },
       options: {
-        layout: { padding: { bottom: 110 } },   // more room for logos
+        layout: { padding: { bottom: 110 } }, // space for tick labels + logos + x-title
         plugins: { legend: { display: false } },
+        scales: { 
+          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' } },
+          x: { title: { display: true, text: 'Platform', padding: { top: 60 } } }
+        layout: { padding: { bottom: 70 } },
+        plugins: {
+          legend: { display: false }
+        },
         scales: {
           y: {
             beginAtZero: true,
@@ -294,12 +311,13 @@
             ticks: { precision: 0 }
           },
           x: {
-            title: { display: true, text: 'Platform', padding: { top: 56 } }, // push title lower, above logos
-            ticks: { padding: 14 }
+            title: { display: true, text: 'Platform', padding: { top: 36 } },  // push title lower to clear logos
+            ticks: { padding: 10 }
           }
         }
       },
-      plugins: [verifiedLine, xLogos, barLabels] // pills draw LAST
+      plugins: [verifiedLine, xLogos, barLabels]
+      plugins: [verifiedLine, barLabels, xLogos]
     });
   </script>
 {% endblock %}
