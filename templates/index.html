@@ -44,8 +44,8 @@
           <div style="min-width:110px;font-weight:600">{{label}}</div>
           <select class="select" name="{{key}}_join_month" aria-label="{{label}} month">
             <option value="">Month</option>
-            {% for i, m in enumerate(months, start=1) %}
-              <option value="{{i}}">{{m}}</option>
+            {% for m in months %}
+              <option value="{{ loop.index }}">{{ m }}</option>
             {% endfor %}
           </select>
           <select class="select" name="{{key}}_join_year" aria-label="{{label}} year">
@@ -75,8 +75,8 @@
           <div style="min-width:110px;font-weight:600">{{label}}</div>
           <select class="select" name="{{key}}_join_month" aria-label="{{label}} month">
             <option value="">Month</option>
-            {% for i, m in enumerate(months, start=1) %}
-              <option value="{{i}}">{{m}}</option>
+            {% for m in months %}
+              <option value="{{ loop.index }}">{{ m }}</option>
             {% endfor %}
           </select>
           <select class="select" name="{{key}}_join_year" aria-label="{{label}} year">
@@ -116,18 +116,15 @@ async function collectManual(rootId){
 }
 
 document.getElementById('btn-google').addEventListener('click', async ()=>{
-  // Save manual entries FIRST so they’re available after Google auth redirect.
   await collectManual('manual-grid-a');
   window.location.href = "/login/google";
 });
 
 document.getElementById('btn-manual').addEventListener('click', async ()=>{
   await collectManual('manual-grid-b');
-  // Submit to results without Google
   const form = document.createElement('form');
   form.method = 'POST';
   form.action = '/results';
-  // Use session-stored manual payload (saved via /save_manual); nothing else is required
   document.body.appendChild(form);
   form.submit();
 });

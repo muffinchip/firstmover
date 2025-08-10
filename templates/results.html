@@ -35,12 +35,11 @@
     {% endif %}
   </div>
 
-  <!-- Platform cards (single column) -->
   <div class="cards">
     {% for p in platforms %}
       <div class="card">
         <h3>
-          <img src="{{ p.logo_url or '' }}" alt="" class="logos" onerror="this.style.display='none'">
+          {% if p.logo_url %}<img src="{{ p.logo_url }}" alt="" class="logos" onerror="this.style.display='none'">{% endif %}
           {{ p.name }}
           {% if p.verified %}<span class="badge ok">✔︎ verified</span>{% endif %}
         </h3>
@@ -53,7 +52,6 @@
           Joined: {{ p.joined }}{% if p.email_hint %} &nbsp;·&nbsp; <em>{{ p.email_hint }}</em>{% endif %}
         </div>
 
-        <!-- Mini line chart -->
         <div class="chartBox">
           <canvas id="line_{{ loop.index }}"></canvas>
         </div>
@@ -61,7 +59,6 @@
     {% endfor %}
   </div>
 
-  <!-- Composite + Bar chart -->
   <div class="sectionTitle" style="margin-top:30px;">
     You average in the top {{ composite_text }} of early adopters
   </div>
@@ -77,18 +74,16 @@
 
   <div class="barWrap">
     <canvas id="bars"></canvas>
-    <!-- Percentile pills rendered dynamically and kept above dashed line -->
     <div id="pills-layer"></div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script>
-const labels = {{ (chart_labels or [p.name for p in platforms])|tojson }};
-const values = {{ (chart_values or [p.percentile for p in platforms])|tojson }};
-const verifiedFlags = {{ (chart_verified or [p.verified for p in platforms])|tojson }};
+const labels = {{ (chart_labels | default(platforms | map(attribute='name') | list)) | tojson }};
+const values = {{ (chart_values | default(platforms | map(attribute='percentile') | list)) | tojson }};
+const verifiedFlags = {{ (chart_verified | default(platforms | map(attribute='verified') | list)) | tojson }};
 
-// Fallback logo map for bar labels (if app didn't pass URLs)
 const LOGOS = {
   "Gmail":"https://upload.wikimedia.org/wikipedia/commons/4/4e/Gmail_Icon.png",
   "Facebook":"https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png",
@@ -103,9 +98,7 @@ const LOGOS = {
 };
 
 const scoreVerified = {{ (score_verified if score_verified is not none else 'null')|tojson }};
-const composite = {{ (score if score is not none else 'null')|tojson }};
 
-// --- Bar chart with dashed verified composite line and always-on-top pills ---
 const ctx = document.getElementById('bars').getContext('2d');
 const pillsLayer = document.getElementById('pills-layer');
 
@@ -124,8 +117,7 @@ function makePill(text, x, y, verified){
 
 const drawImagesPlugin = {
   id: 'drawImages',
-  afterDatasetsDraw(chart, args, pluginOptions) {
-    // draw platform logos below x labels
+  afterDatasetsDraw(chart){
     const {ctx, chartArea:{bottom}, scales:{x}} = chart;
     const y = bottom + 18;
     x.ticks.forEach((t, i) => {
@@ -147,7 +139,7 @@ const drawImagesPlugin = {
 
 const dashedLinePlugin = {
   id: 'verifiedLine',
-  afterDatasetsDraw(chart, args, pluginOptions){
+  afterDatasetsDraw(chart){
     if(scoreVerified == null) return;
     const {ctx, chartArea, scales:{y}} = chart;
     const yPix = y.getPixelForValue(scoreVerified);
@@ -161,7 +153,7 @@ const dashedLinePlugin = {
     ctx.stroke();
     ctx.restore();
 
-    // Re-draw pills AFTER line so pills are always on top
+    // Recreate pills on top
     clearPills();
     const meta = chart.getDatasetMeta(0);
     meta.data.forEach((bar, i) => {
@@ -186,34 +178,24 @@ const barChart = new Chart(ctx, {
   options:{
     responsive:true,
     maintainAspectRatio:false,
-    plugins:{
-      legend:{display:false},
-      tooltip:{enabled:true}
-    },
+    plugins:{ legend:{display:false}, tooltip:{enabled:true} },
     scales:{
-      y:{
-        title:{display:true,text:'Percentile (lower = earlier)'},
-        min:0,max:100, grid:{color:'#eee'}
-      },
-      x:{
-        ticks:{color:'#222'}
-      }
+      y:{ title:{display:true,text:'Percentile (lower = earlier)'}, min:0,max:100, grid:{color:'#eee'} },
+      x:{ ticks:{color:'#222'} }
     },
     animation:false
   },
   plugins:[drawImagesPlugin, dashedLinePlugin]
 });
 
-// --- Mini line charts for each platform card ---
+// Mini line charts
+const platformPayload = {{ platforms|tojson }};
 function renderLine(idx, points, joinISO){
   const canvas = document.getElementById(`line_${idx}`);
   if(!canvas || !points || !points.length) return;
 
   const labels = points.map(p=>p.x);
   const values = points.map(p=>p.y);
-
-  // Find join index for dashed vertical
-  const jx = joinISO;
 
   const c = new Chart(canvas.getContext('2d'), {
     type:'line',
@@ -222,12 +204,7 @@ function renderLine(idx, points, joinISO){
       responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false}, tooltip:{enabled:true}},
       scales:{
-        x:{ grid:{display:false}, ticks:{
-          callback: (v, i)=> {
-            const d = labels[i];
-            return d ? d.slice(0,4) : '';
-          }
-        }},
+        x:{ grid:{display:false}, ticks:{ callback: (v, i)=> (labels[i]||'').slice(0,4) } },
         y:{ title:{display:true,text:'Users (Millions)'}, grid:{color:'#f0f0f0'} }
       },
       animation:false
@@ -236,11 +213,9 @@ function renderLine(idx, points, joinISO){
       id:'joinDash',
       afterDatasetsDraw(chart){
         const {ctx, chartArea:{top,bottom}, scales:{x}} = chart;
-        // x scale is category—find closest index for join year label
-        let jIndex = labels.findIndex(d => d === jx);
+        let jIndex = labels.indexOf(joinISO);
         if(jIndex < 0){
-          // fallback: find nearest by year
-          const jy = (jx||'').slice(0,4);
+          const jy = (joinISO||'').slice(0,4);
           jIndex = labels.findIndex(d => d.slice(0,4)===jy);
         }
         if(jIndex < 0) return;
@@ -257,9 +232,6 @@ function renderLine(idx, points, joinISO){
     }]
   });
 }
-
-// Render each card’s line chart
-const platformPayload = {{ platforms|tojson }};
 platformPayload.forEach((p, idx)=>{
   const points = (p.chart && p.chart.points_m) ? p.chart.points_m : [];
   renderLine(idx+1, points, p.join_iso);
