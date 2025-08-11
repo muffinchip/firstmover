@@ -17,8 +17,6 @@
 
     <h2 style="margin-top:10px;">You average in the top {{ score if score is not none else 'N/A' }}% of early adopters</h2>
     <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
-
-    <canvas id="barChart"></canvas>
   </div>
 
   <div class="card">
@@ -53,7 +51,7 @@
               before <strong>{{ p.narrative_percent }}%</strong> of current users.
               When you joined {{ p.name }} it had approximately
               <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
-              <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
+              <strong id="today-{{ loop.index }}">{{ "{:,}".format(p.today_users) }}</strong> today.
             </p>
           {% endif %}
 
@@ -69,9 +67,20 @@
                 const metricTag = "{{ p.metric_tag or 'Users' }}";
                 const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                // Determine proportional y-axis max (10% headroom)
+                // Use the series' last point as "today" to keep narrative in sync with the chart.
+                try {
+                  const lastY = (points.length ? points[points.length-1].y : null);
+                  if (lastY !== null) {
+                    const n = Math.round(lastY * 1_000_000); // back to absolute users
+                    const el = document.getElementById('today-{{ loop.index }}');
+                    if (el) el.textContent = n.toLocaleString();
+                  }
+                } catch(e){}
+
+                // Proportional y-axis max (with 10% headroom) and x-axis starts at launch (first point)
                 const maxY = points.reduce((m, pt) => Math.max(m, pt.y || 0), 0) || 0;
                 const niceMax = maxY ? Math.ceil(maxY * 1.1) : undefined;
+                const xMin = points.length ? new Date(points[0].x) : undefined;
 
                 const joinMarkerPlugin = {
                   id: 'joinMarker{{ loop.index }}',
@@ -127,6 +136,7 @@
                     scales: {
                       x: {
                         type: 'time',
+                        min: xMin,
                         time: { unit: 'year', tooltipFormat: 'MMM d, yyyy' },
                         title: { display: true, text: 'Year' },
                         ticks: { maxRotation: 0 }
@@ -151,6 +161,19 @@
     {% endfor %}
   </div>
 
+  <!-- Percentile bar chart moved to the bottom (like the older layout) -->
+  <div class="card">
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+      <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
+      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
+    </div>
+
+    <h3>You average in the top {{ score if score is not none else 'N/A' }}% of early adopters</h3>
+    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
+
+    <canvas id="barChart"></canvas>
+  </div>
+
   <script>
     // ---- Bar chart (percentiles) ----
     const labels = {{ chart_labels|tojson }};
@@ -158,7 +181,7 @@
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
 
-    // Map label -> logo URL (provided by backend for each platform)
+    // label -> logo URL from current platform cards
     const labelToLogo = {};
     {% for p in platforms %}
       {% if p.logo_url %}
@@ -168,7 +191,7 @@
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
-    // Load logos
+    // Preload logos
     const logoImgs = {};
     labels.forEach(l => {
       const url = labelToLogo[l];
@@ -178,7 +201,7 @@
       logoImgs[l] = img;
     });
 
-    // Draw the horizontal verified dashed line BEFORE datasets so our labels can sit on top.
+    // Dashed verified line (drawn before bars so our value labels render above it)
     const verifiedLine = {
       id: 'verifiedLine',
       beforeDatasetsDraw(chart) {
@@ -199,7 +222,7 @@
       }
     };
 
-    // Draw value "pills" AFTER datasets so they are always on top of bars and dashed line
+    // Percentile value "pills" drawn after bars so they’re always on top (and readable over the dashed line)
     const barLabels = {
       id: 'barLabels',
       afterDatasetsDraw(chart) {
@@ -245,7 +268,7 @@
       }
     };
 
-    // Draw logos under tick labels with extra bottom padding
+    // Logos under tick labels (with extra bottom padding so they don’t overlap the labels)
     const xLogos = {
       id: 'xLogos',
       afterDraw(chart) {
@@ -272,14 +295,12 @@
           label: 'Early-adopter Percentile (lower is earlier)',
           data: dataVals,
           borderWidth: 0,
-          backgroundColor: 'rgba(37, 99, 235, 0.35)' // default Chart.js blue w/ transparency
+          backgroundColor: 'rgba(37, 99, 235, 0.35)'
         }]
       },
       options: {
-        layout: { padding: { bottom: 70 } },
-        plugins: {
-          legend: { display: false }
-        },
+        layout: { padding: { bottom: 72 } },   // extra room for logos
+        plugins: { legend: { display: false } },
         scales: {
           y: {
             beginAtZero: true,
@@ -288,7 +309,7 @@
             ticks: { precision: 0 }
           },
           x: {
-            title: { display: true, text: 'Platform', padding: { top: 36 } },  // push title lower to clear logos
+            title: { display: true, text: 'Platform', padding: { top: 40 } }, // push title lower
             ticks: { padding: 10 }
           }
         }
