@@ -82,7 +82,7 @@
             {% if p.after_launch_human and p.percentile is not none and p.joined_users and p.today_users %}
               <p style="margin:8px 0 0 0;">
                 You joined {{ p.name }} <strong>{{ p.after_launch_human }}</strong> after launch,
-                before <strong>{{ '%.1f'|format(100.0 - (100.0 - p.percentile)) if false else (100 - p.percentile)|int ~ '%.0f' }}</strong> of current users.
+                before <strong>{{ '%.1f%%'|format(100 - p.percentile) }}</strong> of current users.
                 When you joined {{ p.name }} it had approximately
                 <strong>{{ '{:,}'.format(p.joined_users|int) }}</strong> users compared to
                 <strong>{{ '{:,}'.format(p.today_users|int) }}</strong> today.
@@ -199,6 +199,16 @@
 
   <!-- Summary bar chart at the bottom -->
   <div class="card">
+    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+      {% if score is defined %}<div><strong>Composite Percentile:</strong> {{ '%.1f'|format(score) }}</div>{% endif %}
+      {% if score_verified is defined %}
+        <div><strong>Verified Composite Percentile:</strong> {{ '%.1f'|format(score_verified) }} <span class="pill">✓ verified</span></div>
+      {% endif %}
+    </div>
+    {% if score is defined %}
+      <h3>You average in the top {{ '%.1f'|format(score) }}% of early adopters</h3>
+      <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
+    {% endif %}
     <div class="chart-wrap bar-chart-wrap">
       <canvas id="barChart"></canvas>
     </div>
