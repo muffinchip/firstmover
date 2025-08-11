@@ -313,14 +313,34 @@
       afterDraw(chart) {
         const { ctx, scales: { x }, chartArea } = chart;
         const bottom = chartArea.bottom;
-        const offset = 38; // extra space below tick labels
+        // Dynamic offset so logos sit below tick labels
+        const tickFontSize = (chart.options.scales?.x?.ticks?.font?.size) || 12;
+        const offset = tickFontSize + 22; // label height + margin
+
+        // Per-label bounding boxes to preserve aspect ratio for wordmarks
+        const logoBounds = {
+          'Amazon Prime': { maxW: 42, maxH: 16 },
+          'OpenAI': { maxW: 28, maxH: 16 },
+          'OpenAI/ChatGPT': { maxW: 28, maxH: 16 }
+        };
+        const defaultBounds = { maxW: 22, maxH: 22 };
+
         (labels || []).forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
           const xPos = x.getPixelForValue(i);
-          const size = 22;
+
+          const bounds = logoBounds[label] || defaultBounds;
+          const iw = img.naturalWidth || img.width || bounds.maxW;
+          const ih = img.naturalHeight || img.height || bounds.maxH;
+          const ratio = Math.min(bounds.maxW / iw, bounds.maxH / ih);
+          const w = Math.max(1, Math.round(iw * ratio));
+          const h = Math.max(1, Math.round(ih * ratio));
+
           ctx.save();
-          ctx.drawImage(img, Math.round(xPos - size/2), Math.round(bottom + offset), size, size);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, Math.round(xPos - w/2), Math.round(bottom + offset), w, h);
           ctx.restore();
         });
       }
@@ -339,11 +359,11 @@
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { bottom: 72 } },
+        layout: { padding: { bottom: 108 } },
         plugins: { legend: { display: false } },
         scales: {
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' }, ticks: { precision: 0 } },
-          x: { title: { display: true, text: 'Platform', padding: { top: 46 } }, ticks: { padding: 12 } }
+          x: { title: { display: true, text: 'Platform', padding: { top: 46 } }, ticks: { padding: 16, maxRotation: 0, minRotation: 0 } }
         }
       },
       plugins: [verifiedLine, barLabels, xLogos]
