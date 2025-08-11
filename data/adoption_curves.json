@@ -517,4 +517,35 @@
       "2024\u20132025: ~230M often cited; kept flat into early 2025."
     ]
   }
+  "youtube": {
+    "launch_date": "2005-02-14",
+    "timeline": [
+      [
+        "2005-02-14",
+        0
+      ],
+      [
+        "2013-03-01",
+        1000000000
+      ],
+      [
+        "2019-05-01",
+        2000000000
+      ],
+      [
+        "2023-10-01",
+        2500000000
+      ],
+      [
+        "2025-01-01",
+        2700000000
+      ]
+    ],
+    "notes": [
+      "2013: 1B monthly users \u2014 YouTube milestone.",
+      "2019: 2B logged-in MAUs \u2014 Google/YouTube disclosures (I/O).",
+      "2023: ~2.5B MAUs \u2014 widely cited industry estimates.",
+      "2025: carried forward to ~2.7B for continuity."
+    ]
+  }
 }
