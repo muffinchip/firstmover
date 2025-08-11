@@ -19,7 +19,7 @@
   .platform-logo { width: 18px; height: 18px; object-fit: contain; }
   .platform-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
   .chart-wrap { width:100%; height: 280px; margin-top:10px; }
-  .bar-chart-wrap { height: 320px; }
+  .bar-chart-wrap { height: 420px; }
   canvas { background:#fff; border:1px solid var(--line); border-radius:10px; }
 </style>
 
@@ -49,6 +49,9 @@
         {% set _logo = p.logo_url %}
 {% if p.name == 'Amazon Prime' %}
   {% set _logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Amazon_Prime_logo_%282022%29.svg/1024px-Amazon_Prime_logo_%282022%29.svg.png?20240103045245' %}
+{% endif %}
+{% if p.name == 'Reddit' %}
+  {% set _logo = 'https://redditinc.com/hs-fs/hubfs/Reddit%20Inc/Content/Brand%20Page/Reddit_Logo.png' %}
 {% endif %}
 {% if _logo %}
   <img class="platform-logo" src="{{ _logo }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>
@@ -218,6 +221,8 @@
 
     // Override: Amazon Prime logo (high‑res wordmark)
     labelToLogo["Amazon Prime"] = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Amazon_Prime_logo_%282022%29.svg/1024px-Amazon_Prime_logo_%282022%29.svg.png?20240103045245";
+    // Override: Reddit logo (provided)
+    labelToLogo["Reddit"] = "https://redditinc.com/hs-fs/hubfs/Reddit%20Inc/Content/Brand%20Page/Reddit_Logo.png";
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
