@@ -19,6 +19,7 @@
   .platform-logo { width: 18px; height: 18px; object-fit: contain; }
   .platform-head { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
   .chart-wrap { width:100%; height: 280px; margin-top:10px; }
+  .bar-chart-wrap { height: 320px; }
   canvas { background:#fff; border:1px solid var(--line); border-radius:10px; }
 </style>
 
@@ -45,9 +46,13 @@
   {% for p in platforms %}
     <div class="card">
       <div style="display:flex; align-items:flex-start; gap:12px;">
-        {% if p.logo_url %}
-          <img class="platform-logo" src="{{ p.logo_url }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>
-        {% endif %}
+        {% set _logo = p.logo_url %}
+{% if p.name == 'Amazon Prime' %}
+  {% set _logo = 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Amazon_Prime_logo_%282022%29.svg/1024px-Amazon_Prime_logo_%282022%29.svg.png?20240103045245' %}
+{% endif %}
+{% if _logo %}
+  <img class="platform-logo" src="{{ _logo }}" alt="{{ p.name }} logo" onerror="this.style.display='none'"/>
+{% endif %}
 
         <div style="flex:1; min-width:260px;">
           <div class="platform-head">
@@ -191,7 +196,9 @@
 
   <!-- Summary bar chart at the bottom -->
   <div class="card">
-    <canvas id="barChart"></canvas>
+    <div class="chart-wrap bar-chart-wrap">
+      <canvas id="barChart"></canvas>
+    </div>
   </div>
 
   <script>
@@ -208,6 +215,9 @@
         labelToLogo[{{ p.name|tojson }}] = {{ p.logo_url|tojson }};
       {% endif %}
     {% endfor %}
+
+    // Override: Amazon Prime logo (high‑res wordmark)
+    labelToLogo["Amazon Prime"] = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Amazon_Prime_logo_%282022%29.svg/1024px-Amazon_Prime_logo_%282022%29.svg.png?20240103045245";
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
@@ -314,7 +324,8 @@
         }]
       },
       options: {
-        layout: { padding: { bottom: 92 } },
+        maintainAspectRatio: false,
+        layout: { padding: { bottom: 72 } },
         plugins: { legend: { display: false } },
         scales: {
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' }, ticks: { precision: 0 } },
