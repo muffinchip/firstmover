@@ -315,13 +315,13 @@
         const bottom = chartArea.bottom;
         // Dynamic offset so logos sit below tick labels
         const tickFontSize = (chart.options.scales?.x?.ticks?.font?.size) || 12;
-        const offset = tickFontSize + 22; // label height + margin
+        const offset = tickFontSize + 34; // label height + margin
 
         // Per-label bounding boxes to preserve aspect ratio for wordmarks
         const logoBounds = {
-          'Amazon Prime': { maxW: 42, maxH: 16 },
-          'OpenAI': { maxW: 28, maxH: 16 },
-          'OpenAI/ChatGPT': { maxW: 28, maxH: 16 }
+          'Amazon Prime': { maxW: 56, maxH: 18 },
+          'OpenAI': { maxW: 44, maxH: 22 },
+          'OpenAI/ChatGPT': { maxW: 44, maxH: 22 }
         };
         const defaultBounds = { maxW: 22, maxH: 22 };
 
@@ -359,11 +359,11 @@
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { bottom: 108 } },
+        layout: { padding: { bottom: 140 } },
         plugins: { legend: { display: false } },
         scales: {
           y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' }, ticks: { precision: 0 } },
-          x: { title: { display: true, text: 'Platform', padding: { top: 46 } }, ticks: { padding: 16, maxRotation: 0, minRotation: 0 } }
+          x: { title: { display: true, text: 'Platform', padding: { top: 46 } }, ticks: { padding: 18, maxRotation: 0, minRotation: 0, autoSkip: false, maxTicksLimit: (labels ? labels.length : undefined) } }
         }
       },
       plugins: [verifiedLine, barLabels, xLogos]
