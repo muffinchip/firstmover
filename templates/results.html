@@ -89,9 +89,7 @@
     <strong>{{ '{:,}'.format(p.today_users|int) }}</strong> today.
   </p>
 {% endif %}
-          {% endif %}
-
-          {% set has_points = p.chart and p.chart.points_m %}
+{% set has_points = p.chart and p.chart.points_m %}
           {% if has_points %}
             <div class="chart-wrap">
               <canvas id="curve-{{ loop.index }}"></canvas>

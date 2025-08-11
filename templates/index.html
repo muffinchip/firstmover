@@ -28,17 +28,18 @@
         ('amazonprime','Amazon Prime')
       ] %}
 
-      {% set logos = {
-        'facebook': 'https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png',
-        'twitter': 'https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg',
-        'instagram': 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png',
-        'linkedin': 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg',
-        'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
-        'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
-        'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
-        'reddit': 'https://upload.wikimedia.org/wikipedia/commons/5/58/Reddit_logo_new.svg',
-        'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg'
-      } %}
+{% set logos = {
+  'facebook': 'https://upload.wikimedia.org/wikipedia/commons/0/05/Facebook_Logo_%282019%29.png',
+  'twitter': 'https://upload.wikimedia.org/wikipedia/commons/5/53/X_logo_2023_original.svg',
+  'instagram': 'https://upload.wikimedia.org/wikipedia/commons/a/a5/Instagram_icon.png',
+  'linkedin': 'https://upload.wikimedia.org/wikipedia/commons/8/81/LinkedIn_icon.svg',
+  'dropbox': 'https://upload.wikimedia.org/wikipedia/commons/7/78/Dropbox_Icon.svg',
+  'openai': 'https://upload.wikimedia.org/wikipedia/commons/4/4d/OpenAI_Logo.svg',
+  'spotify': 'https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo_without_text.svg',
+  'reddit': 'https://redditinc.com/hs-fs/hubfs/Reddit%20Inc/Content/Brand%20Page/Reddit_Logo.png',
+  'amazonprime': 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Amazon_Prime_logo_%282022%29.svg/1024px-Amazon_Prime_logo_%282022%29.svg.png?20240103045245'
+} %}
+
 
       <div>
         {% for key, label in platforms %}
