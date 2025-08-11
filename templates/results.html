@@ -51,7 +51,7 @@
               before <strong>{{ p.narrative_percent }}%</strong> of current users.
               When you joined {{ p.name }} it had approximately
               <strong>{{ "{:,}".format(p.joined_users) }}</strong> users compared to
-              <strong id="today-{{ loop.index }}">{{ "{:,}".format(p.today_users) }}</strong> today.
+              <strong>{{ "{:,}".format(p.today_users) }}</strong> today.
             </p>
           {% endif %}
 
@@ -61,26 +61,21 @@
             </div>
             <script>
               (function(){
+                // points: [{x:'YYYY-MM-DD', y:<millions>}]
                 const points = {{ p.chart['points_m']|tojson }};
                 const joinISO = "{{ p.join_iso or '' }}";
                 const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
                 const metricTag = "{{ p.metric_tag or 'Users' }}";
                 const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                // Use the series' last point as "today" to keep narrative in sync with the chart.
-                try {
-                  const lastY = (points.length ? points[points.length-1].y : null);
-                  if (lastY !== null) {
-                    const n = Math.round(lastY * 1_000_000); // back to absolute users
-                    const el = document.getElementById('today-{{ loop.index }}');
-                    if (el) el.textContent = n.toLocaleString();
-                  }
-                } catch(e){}
+                // Guard
+                if (!points || !points.length) return;
 
-                // Proportional y-axis max (with 10% headroom) and x-axis starts at launch (first point)
-                const maxY = points.reduce((m, pt) => Math.max(m, pt.y || 0), 0) || 0;
+                // Compute axis bounds from series so x starts at launch and ends at last known point.
+                const firstX = new Date(points[0].x);
+                const lastX  = new Date(points[points.length - 1].x);
+                const maxY   = points.reduce((m, pt) => Math.max(m, pt.y || 0), 0);
                 const niceMax = maxY ? Math.ceil(maxY * 1.1) : undefined;
-                const xMin = points.length ? new Date(points[0].x) : undefined;
 
                 const joinMarkerPlugin = {
                   id: 'joinMarker{{ loop.index }}',
@@ -117,6 +112,7 @@
                     datasets: [{
                       label: metricTag + ' (Millions)',
                       data: points,
+                      parsing: { xAxisKey: 'x', yAxisKey: 'y' },
                       fill: false,
                       tension: 0.15,
                       spanGaps: true,
@@ -125,6 +121,7 @@
                     }]
                   },
                   options: {
+                    maintainAspectRatio: false,
                     plugins: {
                       legend: { display: false },
                       tooltip: {
@@ -136,7 +133,8 @@
                     scales: {
                       x: {
                         type: 'time',
-                        min: xMin,
+                        min: firstX,
+                        max: lastX,
                         time: { unit: 'year', tooltipFormat: 'MMM d, yyyy' },
                         title: { display: true, text: 'Year' },
                         ticks: { maxRotation: 0 }
@@ -156,21 +154,13 @@
         </div>
       </div>
       {% if not loop.last %}
-      <hr style="border:none;border-top:1px dashed var(--line); margin:12px 0;">
+        <hr style="border:none;border-top:1px dashed var(--line); margin:12px 0;">
       {% endif %}
     {% endfor %}
   </div>
 
-  <!-- Percentile bar chart moved to the bottom (like the older layout) -->
+  <!-- Bar chart moved to bottom -->
   <div class="card">
-    <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
-      <div><strong>Composite Percentile:</strong> {{ score if score is not none else 'N/A' }}</div>
-      <div><strong>Verified Composite Percentile:</strong> {{ score_verified if score_verified is not none else 'N/A' }}{% if score_verified is not none %} <span class="pill">✓ verified</span>{% endif %}</div>
-    </div>
-
-    <h3>You average in the top {{ score if score is not none else 'N/A' }}% of early adopters</h3>
-    <p class="note" style="margin-top:4px;">Smaller numbers mean earlier adoption. A ✓ next to a value means it's verified from email.</p>
-
     <canvas id="barChart"></canvas>
   </div>
 
@@ -181,7 +171,7 @@
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
 
-    // label -> logo URL from current platform cards
+    // Map label -> logo URL from platform cards
     const labelToLogo = {};
     {% for p in platforms %}
       {% if p.logo_url %}
@@ -191,7 +181,7 @@
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
-    // Preload logos
+    // Load logos
     const logoImgs = {};
     labels.forEach(l => {
       const url = labelToLogo[l];
@@ -201,7 +191,7 @@
       logoImgs[l] = img;
     });
 
-    // Dashed verified line (drawn before bars so our value labels render above it)
+    // Verified dashed line (drawn before bars)
     const verifiedLine = {
       id: 'verifiedLine',
       beforeDatasetsDraw(chart) {
@@ -222,7 +212,7 @@
       }
     };
 
-    // Percentile value "pills" drawn after bars so they’re always on top (and readable over the dashed line)
+    // Value pills (drawn after bars so they sit on top of bars & dashed line)
     const barLabels = {
       id: 'barLabels',
       afterDatasetsDraw(chart) {
@@ -243,7 +233,6 @@
           const rectX = Math.round(xPos - boxW/2);
           const rectY = Math.round(yTop - boxH - 6);
 
-          // white pill (no border/shadow)
           ctx.fillStyle = 'rgba(255,255,255,0.98)';
           const r = 10;
           ctx.beginPath();
@@ -268,18 +257,18 @@
       }
     };
 
-    // Logos under tick labels (with extra bottom padding so they don’t overlap the labels)
+    // Logos under tick labels (extra bottom padding; drawn after everything)
     const xLogos = {
       id: 'xLogos',
       afterDraw(chart) {
         const { ctx, scales: { x }, chartArea } = chart;
         const bottom = chartArea.bottom;
-        const offset = 28; // space below tick labels
+        const offset = 38; // space below tick labels
         labels.forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
           const xPos = x.getPixelForValue(i);
-          const size = 20;
+          const size = 22; // a touch larger; we added more padding below
           ctx.save();
           ctx.drawImage(img, Math.round(xPos - size/2), Math.round(bottom + offset), size, size);
           ctx.restore();
@@ -299,8 +288,10 @@
         }]
       },
       options: {
-        layout: { padding: { bottom: 72 } },   // extra room for logos
-        plugins: { legend: { display: false } },
+        layout: { padding: { bottom: 92 } },   // more space for logos
+        plugins: {
+          legend: { display: false }
+        },
         scales: {
           y: {
             beginAtZero: true,
@@ -309,8 +300,8 @@
             ticks: { precision: 0 }
           },
           x: {
-            title: { display: true, text: 'Platform', padding: { top: 40 } }, // push title lower
-            ticks: { padding: 10 }
+            title: { display: true, text: 'Platform', padding: { top: 46 } }, // push title lower to clear logos
+            ticks: { padding: 12 }
           }
         }
       },
