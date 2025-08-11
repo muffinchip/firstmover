@@ -64,7 +64,7 @@
                 // Expect p.chart.points_m in *millions* with ISO x
                 const points = {{ p.chart['points_m']|tojson }};
                 const joinISO = "{{ p.join_iso or '' }}";
-                const yLabel = "{{ p.y_label or (p.metric_tag ? p.metric_tag + ' (Millions)' : 'Users (Millions)') }}";
+				const yLabel = "{{ p.y_label or ( (p.metric_tag ~ ' (Millions)') if p.metric_tag else 'Users (Millions)') }}";
                 const metricTag = "{{ p.metric_tag or 'Users' }}";
                 const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
