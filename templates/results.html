@@ -61,19 +61,20 @@
             </div>
             <script>
               (function(){
-                // points: [{x:'YYYY-MM-DD', y:<millions>}]
+                // Expect p.chart.points_m in *millions* with ISO x
                 const points = {{ p.chart['points_m']|tojson }};
                 const joinISO = "{{ p.join_iso or '' }}";
-                const yLabel = "{{ p.y_label or 'Users (Millions)' }}";
+                const yLabel = "{{ p.y_label or (p.metric_tag ? p.metric_tag + ' (Millions)' : 'Users (Millions)') }}";
                 const metricTag = "{{ p.metric_tag or 'Users' }}";
                 const ctx = document.getElementById('curve-{{ loop.index }}').getContext('2d');
 
-                // Guard
                 if (!points || !points.length) return;
 
-                // Compute axis bounds from series so x starts at launch and ends at last known point.
+                // Make the x-axis start at the first datum (near launch) and end at the last datum
                 const firstX = new Date(points[0].x);
                 const lastX  = new Date(points[points.length - 1].x);
+
+                // Proportional y-axis headroom so the last point is visible and matches the text
                 const maxY   = points.reduce((m, pt) => Math.max(m, pt.y || 0), 0);
                 const niceMax = maxY ? Math.ceil(maxY * 1.1) : undefined;
 
@@ -93,7 +94,7 @@
                     c.moveTo(x, top);
                     c.lineTo(x, bottom);
                     c.stroke();
-                    // arrow at top
+                    // arrow head
                     c.setLineDash([]);
                     c.fillStyle = '#0f172a';
                     c.beginPath();
@@ -153,13 +154,14 @@
           {% endif %}
         </div>
       </div>
+
       {% if not loop.last %}
         <hr style="border:none;border-top:1px dashed var(--line); margin:12px 0;">
       {% endif %}
     {% endfor %}
   </div>
 
-  <!-- Bar chart moved to bottom -->
+  <!-- Bar chart moved to bottom (like the older, cleaner output) -->
   <div class="card">
     <canvas id="barChart"></canvas>
   </div>
@@ -171,17 +173,15 @@
     const verifiedFlags = {{ chart_verified|tojson }};
     const verifiedComposite = {{ score_verified if score_verified is not none else 'null' }};
 
-    // Map label -> logo URL from platform cards
+    // Map label -> logo URL (from the platform list above)
     const labelToLogo = {};
     {% for p in platforms %}
-      {% if p.logo_url %}
-        labelToLogo["{{ p.name }}"] = "{{ p.logo_url }}";
-      {% endif %}
+      {% if p.logo_url %} labelToLogo["{{ p.name }}"] = "{{ p.logo_url }}"; {% endif %}
     {% endfor %}
 
     const ctxBar = document.getElementById('barChart').getContext('2d');
 
-    // Load logos
+    // Preload logos
     const logoImgs = {};
     labels.forEach(l => {
       const url = labelToLogo[l];
@@ -212,7 +212,7 @@
       }
     };
 
-    // Value pills (drawn after bars so they sit on top of bars & dashed line)
+    // Value “pills” above each bar (drawn after datasets)
     const barLabels = {
       id: 'barLabels',
       afterDatasetsDraw(chart) {
@@ -227,8 +227,7 @@
           ctx.save();
           ctx.font = '600 13px Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
           const metrics = ctx.measureText(text);
-          const paddingX = 8, paddingY = 5;
-          const boxW = metrics.width + paddingX*2;
+          const boxW = metrics.width + 16;
           const boxH = 20;
           const rectX = Math.round(xPos - boxW/2);
           const rectY = Math.round(yTop - boxH - 6);
@@ -257,18 +256,18 @@
       }
     };
 
-    // Logos under tick labels (extra bottom padding; drawn after everything)
+    // Logos under tick labels with generous bottom padding
     const xLogos = {
       id: 'xLogos',
       afterDraw(chart) {
         const { ctx, scales: { x }, chartArea } = chart;
         const bottom = chartArea.bottom;
-        const offset = 38; // space below tick labels
+        const offset = 38;     // gives the labels room
+        const size = 22;       // crisp but not crowded
         labels.forEach((label, i) => {
           const img = logoImgs[label];
           if (!img || !img.complete) return;
           const xPos = x.getPixelForValue(i);
-          const size = 22; // a touch larger; we added more padding below
           ctx.save();
           ctx.drawImage(img, Math.round(xPos - size/2), Math.round(bottom + offset), size, size);
           ctx.restore();
@@ -288,21 +287,11 @@
         }]
       },
       options: {
-        layout: { padding: { bottom: 92 } },   // more space for logos
-        plugins: {
-          legend: { display: false }
-        },
+        layout: { padding: { bottom: 92 } },   // space for tick labels + logos + x title
+        plugins: { legend: { display: false } },
         scales: {
-          y: {
-            beginAtZero: true,
-            max: 100,
-            title: { display: true, text: 'Percentile' },
-            ticks: { precision: 0 }
-          },
-          x: {
-            title: { display: true, text: 'Platform', padding: { top: 46 } }, // push title lower to clear logos
-            ticks: { padding: 12 }
-          }
+          y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentile' }, ticks: { precision: 0 } },
+          x: { title: { display: true, text: 'Platform', padding: { top: 46 } }, ticks: { padding: 12 } }
         }
       },
       plugins: [verifiedLine, barLabels, xLogos]
