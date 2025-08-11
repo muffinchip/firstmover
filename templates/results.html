@@ -76,18 +76,19 @@
             {% if email_hint %}<span style="margin-left:8px;">· <em>Also found in email: {{ email_hint }}</em></span>{% endif %}
           </div>
 
-          {% if p.narrative %}
-            <p style="margin:8px 0 0 0;">{{ p.narrative|safe }}</p>
-          {% else %}
-            {% if p.after_launch_human and p.percentile is not none and p.joined_users and p.today_users %}
-              <p style="margin:8px 0 0 0;">
-                You joined {{ p.name }} <strong>{{ p.after_launch_human }}</strong> after launch,
-                before <strong>{{ '%.1f%%'|format(100 - p.percentile) }}</strong> of current users.
-                When you joined {{ p.name }} it had approximately
-                <strong>{{ '{:,}'.format(p.joined_users|int) }}</strong> users compared to
-                <strong>{{ '{:,}'.format(p.today_users|int) }}</strong> today.
-              </p>
-            {% endif %}
+          {% set after_str = p.narrative_after or p.after_launch_human %}
+{% set percent_str = (p.narrative_percent ~ '%') if (p.narrative_percent is not none) else ('%.1f%%'|format(100 - (p.percentile if p.percentile is not none else 0))) %}
+{% if p.narrative %}
+  <p style="margin:8px 0 0 0;">{{ p.narrative|safe }}</p>
+{% elif after_str is not none and (p.joined_users is not none) and (p.today_users is not none) %}
+  <p style="margin:8px 0 0 0;">
+    You joined {{ p.name }} <strong>{{ after_str }}</strong> after launch,
+    before <strong>{{ percent_str }}</strong> of current users.
+    When you joined {{ p.name }} it had approximately
+    <strong>{{ '{:,}'.format(p.joined_users|int) }}</strong> users compared to
+    <strong>{{ '{:,}'.format(p.today_users|int) }}</strong> today.
+  </p>
+{% endif %}
           {% endif %}
 
           {% set has_points = p.chart and p.chart.points_m %}
